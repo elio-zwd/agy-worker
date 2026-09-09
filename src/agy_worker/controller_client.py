@@ -47,6 +47,117 @@ class ControllerClient:
     def _invalid_state(message="Controller 连接元数据无效"):
         return WorkerError("controller_state_invalid", message)
 
+    @staticmethod
+    def _management_state(config_path, state_path):
+        """读取显式管理操作所需的 legacy state，不套用当前 Bridge 身份检查。"""
+        try:
+            value = json.loads(state_path.read_text("utf-8"))
+        except FileNotFoundError:
+            return None
+        except (ValueError, OSError) as error:
+            raise ControllerClient._invalid_state() from error
+
+        try:
+            legacy = LegacyControllerState.model_validate(value)
+            endpoint = validate_controller_endpoint(legacy.endpoint)
+            state_config_path = Path(legacy.config_path).resolve()
+        except (ValidationError, ValueError, TypeError, OSError) as error:
+            raise ControllerClient._invalid_state(
+                "Controller 管理元数据无效；endpoint 必须是 http://127.0.0.1:<port>"
+            ) from error
+        if state_config_path != config_path:
+            raise WorkerError("controller_conflict", "数据目录正由另一份配置使用")
+        return value, legacy, endpoint
+
+    @staticmethod
+    def stop_existing(config_path, timeout=10):
+        """显式停止指定配置的现有 Controller，并等待目标实例真实退出。"""
+        config_path = Path(config_path).resolve()
+        config = tomllib.loads(config_path.read_text("utf-8"))
+        data_dir = Path(config["data_dir"]).resolve()
+        state_path = data_dir / CONTROLLER_STATE_FILE
+        initial = ControllerClient._management_state(config_path, state_path)
+        if initial is None:
+            raise WorkerError("controller_unavailable", "AGY Worker Controller 当前未运行")
+
+        raw_state, legacy, endpoint = initial
+        target_instance_id = raw_state.get("instance_id")
+        if not isinstance(target_instance_id, str) or not target_instance_id:
+            target_instance_id = None
+        target_pid = legacy.pid
+        target_token = legacy.token
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+        def request(state_value, request_endpoint, path, payload=None, request_timeout=1):
+            body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            request_object = urllib.request.Request(
+                request_endpoint + path,
+                data=body,
+                method="GET" if payload is None else "POST",
+                headers={
+                    "Authorization": "Bearer " + state_value["token"],
+                    "Content-Type": "application/json",
+                },
+            )
+            try:
+                with opener.open(request_object, timeout=request_timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except (urllib.error.URLError, TimeoutError, ValueError, OSError) as error:
+                raise WorkerError("controller_unavailable", "AGY Worker Controller 无法连接") from error
+
+        stop_timeout = max(0.1, min(float(timeout), 3.0))
+        response = request(
+            raw_state,
+            endpoint,
+            "/control/stop",
+            {"protocol_version": legacy.protocol_version},
+            request_timeout=stop_timeout,
+        )
+        if not response.get("ok"):
+            error = response.get("error", {})
+            raise WorkerError(
+                error.get("code", "runtime_error"),
+                error.get("message", "Controller 停止请求失败"),
+            )
+
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        while time.monotonic() < deadline:
+            current = ControllerClient._management_state(config_path, state_path)
+            if current is None:
+                return {"ok": True, "status": "stopped"}
+            current_raw, current_legacy, current_endpoint = current
+
+            if target_instance_id is not None:
+                if current_raw.get("instance_id") != target_instance_id:
+                    return {"ok": True, "status": "replaced"}
+            elif current_legacy.pid != target_pid or current_legacy.token != target_token:
+                return {"ok": True, "status": "replaced"}
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                health = request(
+                    current_raw,
+                    current_endpoint,
+                    "/control/health",
+                    request_timeout=min(0.5, remaining),
+                )
+            except WorkerError as error:
+                if error.code == "controller_unavailable":
+                    return {"ok": True, "status": "stopped"}
+                raise
+
+            if health.get("status") != "ready":
+                return {"ok": True, "status": "stopped"}
+            if target_instance_id is not None and health.get("instance_id") not in (None, target_instance_id):
+                return {"ok": True, "status": "replaced"}
+            if target_instance_id is None and health.get("pid") not in (None, target_pid):
+                return {"ok": True, "status": "replaced"}
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+        raise WorkerError("controller_stop_timeout", "Controller 未在超时内完全退出")
+
     def _read_state(self):
         try:
             value = json.loads(self.state_path.read_text("utf-8"))
