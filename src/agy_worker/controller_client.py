@@ -8,6 +8,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -262,13 +263,28 @@ class ControllerClient:
             raise self._invalid_state("Controller state 与 health 不是同一个实例")
         return health.status == "ready"
 
+    def _cleanup_stale_environment_files(self, *, older_than=300):
+        """清理异常启动遗留的 proxy 环境文件，不触碰仍可能被新进程读取的新鲜文件。"""
+        cutoff = time.time() - max(0, float(older_than))
+        candidates = list(self.data_dir.glob("controller-environment-*.json"))
+        candidates.append(self.data_dir / "controller-environment.json")
+        for path in candidates:
+            try:
+                if path.stat().st_mtime <= cutoff:
+                    path.unlink(missing_ok=True)
+            except (FileNotFoundError, OSError):
+                # 这是凭据卫生清理，不让 ACL/并发删除等清理失败阻断 Controller 启动。
+                pass
+
     def _launch_windows(self, log_dir):
         """通过 WMI 服务创建进程，避免 Controller 被 stdio MCP 的 Job Object 回收。"""
         pythonw = Path(sys.executable).with_name("pythonw.exe")
         pwsh = shutil.which("pwsh.exe")
         if not pythonw.is_file() or not pwsh:
             raise WorkerError("dependency_missing", "启动 Controller 需要 pythonw.exe 与 PowerShell 7")
-        environment_file = self.data_dir / "controller-environment.json"
+        self._cleanup_stale_environment_files()
+        # 每次 launch 使用独立环境文件；重试子进程各自读取/删除，避免互相抢同一文件。
+        environment_file = self.data_dir / f"controller-environment-{uuid.uuid4().hex}.json"
         proxy_names = {
             "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
             "http_proxy", "https_proxy", "all_proxy", "no_proxy", "wss_proxy",
