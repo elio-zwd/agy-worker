@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import agy_worker.controller_client as controller_client_module
 from agy_worker.common import WorkerError
 from agy_worker.controller_client import ControllerClient
@@ -106,3 +108,27 @@ def test_stale_controller_environment_files_are_cleaned_without_touching_fresh_f
     assert not stale.exists()
     assert not legacy.exists()
     assert fresh.exists()
+
+
+@pytest.mark.skipif(
+    controller_client_module.sys.platform != "win32",
+    reason="需要真实 Windows WMI Controller 启动",
+)
+def test_real_wmi_launch_records_controller_ownership(tmp_path):
+    """真实 WMI 返回 PID 必须对应最终 healthy instance，才能安全建立 run-task ownership。"""
+    config, data_dir = make_config(tmp_path)
+    client = None
+    try:
+        client = ControllerClient(config, startup_timeout=10)
+        assert client.last_launch_pid == client.state["pid"]
+        assert client.started_controller is True
+        assert client.started_instance_id == client.state["instance_id"]
+    finally:
+        state_path = data_dir / "controller.json"
+        if state_path.exists():
+            expected_instance_id = client.state["instance_id"] if client is not None else None
+            ControllerClient.stop_existing(
+                config,
+                expected_instance_id=expected_instance_id,
+                timeout=10,
+            )
