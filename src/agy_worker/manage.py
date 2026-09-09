@@ -15,6 +15,7 @@ from .controller_client import ControllerClient
 from .controller_protocol import PROTOCOL_VERSION
 from .models import (WorkerRequest,ContinueRequest,StatusRequest,CancelRequest,
                      ArtifactRequest,CapabilitiesRequest)
+from .security import inspect_data_dir_acl
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -56,13 +57,15 @@ def doctor():
     help_result=subprocess.run([str(executable),'--help'],capture_output=True,text=True,encoding='utf-8',timeout=20)
     help_text=help_result.stdout+help_result.stderr
     flags=['--conversation','--output-format','--new-project','--add-dir','--print-timeout']
+    data_dir_acl=inspect_data_dir_acl(Path(config['data_dir']))
     report={'python':sys.version.split()[0],'platform':sys.platform,'agy_path':str(executable),'agy_sha256':digest(executable),
       'required_flags':{flag:flag in help_text for flag in flags},
       'browser_program_exists':Path(config['browser']['args'][0]).is_file(),
       'enabled_kinds':config['enabled_kinds'],
       'permission_enforcement':'hook_and_broker','os_isolation':False,
       'source_write_enabled':False,'arbitrary_shell_enabled':False,
-      'controller_protocol_version':PROTOCOL_VERSION}
+      'controller_protocol_version':PROTOCOL_VERSION,
+      'data_dir_acl':data_dir_acl}
     atomic_json(ROOT/'work/doctor.json',report)
     print(json.dumps(report,ensure_ascii=False,indent=2))
     if help_result.returncode or not all(report['required_flags'].values()) or not report['browser_program_exists']:
