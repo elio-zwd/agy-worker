@@ -7,6 +7,7 @@ import time
 from contextlib import AsyncExitStack, asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
@@ -242,7 +243,13 @@ def test_management_stop_can_stop_older_protocol_controller(tmp_path, monkeypatc
     monkeypatch.setattr(runtime_module, "PROTOCOL_VERSION", 1)
     thread = threading.Thread(target=controller_module.run, args=(config,), daemon=True)
     thread.start()
-    state_path, _state = wait_for_controller_state(config)
+    state_path, state = wait_for_controller_state(config)
+    # 模拟真实 v1 controller.json：没有 v2 identity 扩展字段。
+    legacy_state = {
+        key: state[key]
+        for key in ("protocol_version", "pid", "endpoint", "token", "config_path", "started_at")
+    }
+    state_path.write_text(json.dumps(legacy_state), encoding="utf-8")
 
     with pytest.raises(WorkerError) as caught:
         ControllerClient(config, autostart=False)
@@ -350,3 +357,92 @@ def test_manage_stop_accepts_custom_config(tmp_path, monkeypatch):
 
     manage_module.main()
     assert called["config_path"] == config.resolve()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="需要 Windows msvcrt 文件锁")
+def test_launch_lock_takeover_after_owner_releases(tmp_path, monkeypatch):
+    """等待者第一次抢锁失败后，owner 退出时必须在同一 deadline 内重新接管。"""
+    import msvcrt
+
+    config = make_config(tmp_path)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    lock_path = data_dir / "controller-launch.lock"
+    owner = lock_path.open("a+b")
+    owner.seek(0)
+    msvcrt.locking(owner.fileno(), msvcrt.LK_NBLCK, 1)
+    controller_threads = []
+
+    def release_owner():
+        time.sleep(0.2)
+        owner.seek(0)
+        msvcrt.locking(owner.fileno(), msvcrt.LK_UNLCK, 1)
+        owner.close()
+
+    def fake_launch(self):
+        thread = threading.Thread(target=controller_module.run, args=(config,), daemon=True)
+        thread.start()
+        controller_threads.append(thread)
+        return 41001
+
+    monkeypatch.setattr(ControllerClient, "_launch", fake_launch)
+    releaser = threading.Thread(target=release_owner, daemon=True)
+    releaser.start()
+    client = ControllerClient(config, startup_timeout=2)
+    try:
+        assert client.last_launch_pid == 41001
+        assert len(controller_threads) == 1
+    finally:
+        ControllerClient.stop_existing(config, timeout=3)
+        for thread in controller_threads:
+            thread.join(timeout=3)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="需要 Windows msvcrt 文件锁")
+def test_launch_retry_after_first_child_never_becomes_healthy(tmp_path, monkeypatch):
+    """一次 launch 后没有 healthy state 时，cooldown 后必须允许同一 deadline 内重试。"""
+    config = make_config(tmp_path)
+    launch_times = []
+    controller_threads = []
+
+    def fake_launch(self):
+        launch_times.append(time.monotonic())
+        if len(launch_times) == 1:
+            return 41001
+        thread = threading.Thread(target=controller_module.run, args=(config,), daemon=True)
+        thread.start()
+        controller_threads.append(thread)
+        return 41002
+
+    monkeypatch.setattr(ControllerClient, "_launch", fake_launch)
+    client = ControllerClient(config, startup_timeout=2)
+    try:
+        assert len(launch_times) == 2
+        assert launch_times[1] - launch_times[0] >= 0.45
+        assert client.last_launch_pid == 41002
+    finally:
+        ControllerClient.stop_existing(config, timeout=3)
+        for thread in controller_threads:
+            thread.join(timeout=3)
+
+
+def test_windows_wmi_launch_returns_created_pid(tmp_path, monkeypatch):
+    """WMI ProcessId 只能作为启动 ownership/诊断证据，必须被可靠解析并返回。"""
+    config = make_config(tmp_path)
+    fake_python = tmp_path / "python.exe"
+    fake_pythonw = tmp_path / "pythonw.exe"
+    fake_python.write_text("", encoding="utf-8")
+    fake_pythonw.write_text("", encoding="utf-8")
+    monkeypatch.setattr(controller_client_module.sys, "executable", str(fake_python))
+    monkeypatch.setattr(controller_client_module.shutil, "which", lambda name: "C:/pwsh.exe")
+    monkeypatch.setattr(
+        controller_client_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="43210\n", stderr=""),
+    )
+    client = object.__new__(ControllerClient)
+    client.data_dir = tmp_path / "data"
+    client.data_dir.mkdir()
+    client.config_path = config.resolve()
+
+    assert client._launch_windows(tmp_path / "logs") == 43210
