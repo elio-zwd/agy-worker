@@ -74,9 +74,10 @@ def schemas():
         atomic_json(ROOT/'schemas'/(name+'.json'),model.model_json_schema(by_alias=True))
 
 
-def stop():
+def stop(config_path=None):
+    target=Path(config_path).resolve() if config_path else ROOT/'config/runtime.toml'
     try:
-        result=ControllerClient(ROOT/'config/runtime.toml',autostart=False).stop()
+        result=ControllerClient.stop_existing(target)
         print(json.dumps(result,ensure_ascii=False))
     except WorkerError as error:
         if error.code=='controller_unavailable':
@@ -87,9 +88,16 @@ def stop():
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('command',choices=['doctor','register','unregister','schemas','stop'])
-    command=parser.parse_args().command
-    {'doctor':doctor,'register':register,'unregister':lambda:register(True),'schemas':schemas,'stop':stop}[command]()
+    subparsers=parser.add_subparsers(dest='command',required=True)
+    for name in ('doctor','register','unregister','schemas'):
+        subparsers.add_parser(name)
+    stop_parser=subparsers.add_parser('stop')
+    stop_parser.add_argument('--config')
+    args=parser.parse_args()
+    if args.command=='stop':
+        stop(args.config)
+        return
+    {'doctor':doctor,'register':register,'unregister':lambda:register(True),'schemas':schemas}[args.command]()
 
 
 if __name__=='__main__':
