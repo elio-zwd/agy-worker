@@ -1,0 +1,9 @@
+{
+  "request_id": "life-archive-build-001",
+  "workspace_id": "life_archive",
+  "kind": "build",
+  "objective": "调用 execute 执行登记的 HBuilderX Android appResource 导出，提取编译报错和警告原文并引用证据；不分析原因，不修改源码，不生成或上传安装包。",
+  "permissions": {"build": true, "log": true},
+  "inputs": {"command_id": "life_android_resource"},
+  "limits": {"total_timeout_sec": 1200}
+}

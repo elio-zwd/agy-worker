@@ -1,0 +1,45 @@
+schema_version = 1
+data_dir = 'D:\My\_Elio\agy-worker\data'
+enabled_kinds = ['build', 'test', 'log', 'browser', 'vision']
+pwsh = 'C:\Program Files\PowerShell\7\pwsh.exe'
+
+[agy]
+executable = 'C:\Users\70455\AppData\Local\agy\bin\agy.exe'
+
+[workspaces.demo]
+source = 'D:\My\_Elio\agy-worker\examples\demo'
+allowed_commands = ['demo_compile', 'demo_test']
+
+[commands.demo_compile]
+# 构建执行的是副本；样例不接触已有项目。
+argv = ['{python}', '-m', 'py_compile', 'sample.py']
+
+[commands.demo_test]
+argv = ['{python}', '-m', 'unittest', 'test_sample.py']
+
+[workspaces.life_archive]
+source = 'D:\My_Elio\life-archive-app'
+node_modules = 'D:\My_Elio\life-archive-app\node_modules'
+allowed_commands = ['life_android_resource', 'life_markdown_check', 'life_node_tests']
+
+[commands.life_android_resource]
+argv = ['{python}', 'D:\My\_Elio\agy-worker\scripts\build-life-archive.py']
+external_host = 'HBuilderX'
+
+[commands.life_markdown_check]
+argv = ['D:\Program Files\nodejs\node.exe', 'scripts/markdown-smoke.mjs']
+
+[commands.life_node_tests]
+argv = ['D:\Program Files\nodejs\node.exe', '--test', 'tests/*.test.mjs']
+
+[browser]
+command = 'D:\Program Files\nodejs\node.exe'
+args = [
+  'D:\My\_Elio\agy-worker\vendor\browser\node_modules\chrome-devtools-mcp\build\src\bin\chrome-devtools-mcp.js',
+  '--executablePath=C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+  '--isolated', '--headless', '--no-performance-crux',
+  '--no-usage-statistics', '--no-javascript-evaluation'
+]
+
+[android]
+adb = 'D:\sdk\platform-tools\adb.exe'

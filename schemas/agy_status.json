@@ -1,0 +1,33 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "after_revision": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "After Revision"
+    },
+    "wait_ms": {
+      "default": 0,
+      "maximum": 25000,
+      "minimum": 0,
+      "title": "Wait Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "task_id"
+  ],
+  "title": "StatusRequest",
+  "type": "object"
+}

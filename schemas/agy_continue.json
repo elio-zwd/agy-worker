@@ -1,0 +1,252 @@
+{
+  "$defs": {
+    "Inputs": {
+      "additionalProperties": false,
+      "properties": {
+        "command_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command Id"
+        },
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Files",
+          "type": "array"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "title": "Inputs",
+      "type": "object"
+    },
+    "Limits": {
+      "additionalProperties": false,
+      "properties": {
+        "total_timeout_sec": {
+          "default": 300,
+          "maximum": 1800,
+          "minimum": 10,
+          "title": "Total Timeout Sec",
+          "type": "integer"
+        },
+        "summary_max_bytes": {
+          "default": 16384,
+          "maximum": 16384,
+          "minimum": 2048,
+          "title": "Summary Max Bytes",
+          "type": "integer"
+        },
+        "artifact_max_bytes": {
+          "default": 536870912,
+          "maximum": 536870912,
+          "minimum": 1048576,
+          "title": "Artifact Max Bytes",
+          "type": "integer"
+        }
+      },
+      "title": "Limits",
+      "type": "object"
+    },
+    "Permissions": {
+      "additionalProperties": false,
+      "properties": {
+        "build": {
+          "default": false,
+          "title": "Build",
+          "type": "boolean"
+        },
+        "test": {
+          "default": false,
+          "title": "Test",
+          "type": "boolean"
+        },
+        "log": {
+          "default": false,
+          "title": "Log",
+          "type": "boolean"
+        },
+        "browser": {
+          "default": false,
+          "title": "Browser",
+          "type": "boolean"
+        },
+        "browser_interact": {
+          "default": false,
+          "title": "Browser Interact",
+          "type": "boolean"
+        },
+        "origins": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Origins",
+          "type": "array"
+        },
+        "android-ui": {
+          "default": false,
+          "title": "Android-Ui",
+          "type": "boolean"
+        },
+        "device_serial": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Device Serial"
+        },
+        "package": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Package"
+        },
+        "vision": {
+          "default": false,
+          "title": "Vision",
+          "type": "boolean"
+        },
+        "shell": {
+          "default": false,
+          "title": "Shell",
+          "type": "boolean"
+        },
+        "code_write": {
+          "default": false,
+          "title": "Code Write",
+          "type": "boolean"
+        },
+        "write_paths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 30,
+          "title": "Write Paths",
+          "type": "array"
+        },
+        "write_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Write Reason"
+        }
+      },
+      "title": "Permissions",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "request_id": {
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[\\w.-]+$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "workspace_id": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Workspace Id",
+      "type": "string"
+    },
+    "workspace_path": {
+      "anyOf": [
+        {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Path"
+    },
+    "kind": {
+      "enum": [
+        "build",
+        "test",
+        "log",
+        "browser",
+        "android-ui",
+        "vision",
+        "shell"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "objective": {
+      "maxLength": 12000,
+      "minLength": 1,
+      "title": "Objective",
+      "type": "string"
+    },
+    "permissions": {
+      "$ref": "#/$defs/Permissions"
+    },
+    "inputs": {
+      "$ref": "#/$defs/Inputs"
+    },
+    "limits": {
+      "$ref": "#/$defs/Limits"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "expected_turn": {
+      "minimum": 1,
+      "title": "Expected Turn",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "request_id",
+    "workspace_id",
+    "kind",
+    "objective",
+    "session_id",
+    "expected_turn"
+  ],
+  "title": "ContinueRequest",
+  "type": "object"
+}

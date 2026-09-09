@@ -1,0 +1,42 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "artifact_id": {
+      "title": "Artifact Id",
+      "type": "string"
+    },
+    "view": {
+      "default": "text",
+      "enum": [
+        "metadata",
+        "text",
+        "image"
+      ],
+      "title": "View",
+      "type": "string"
+    },
+    "start_line": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Start Line",
+      "type": "integer"
+    },
+    "line_count": {
+      "default": 100,
+      "maximum": 200,
+      "minimum": 1,
+      "title": "Line Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "task_id",
+    "artifact_id"
+  ],
+  "title": "ArtifactRequest",
+  "type": "object"
+}

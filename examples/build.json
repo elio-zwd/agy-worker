@@ -1,0 +1,9 @@
+{
+  "request_id": "demo-build-001",
+  "workspace_id": "demo",
+  "kind": "build",
+  "objective": "编译样例，返回错误原文和证据；不要分析原因，不要修改源码。",
+  "permissions": {"build": true, "log": true},
+  "inputs": {"command_id": "demo_compile"},
+  "limits": {"total_timeout_sec": 180}
+}
