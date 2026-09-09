@@ -22,6 +22,10 @@ source = 'D:\My_Elio\life-archive-app'
 node_modules = 'D:\My_Elio\life-archive-app\node_modules'
 allowed_commands = ['life_android_resource', 'life_markdown_check', 'life_node_tests']
 
+[workspaces.ai_skill_roundtable]
+source = 'D:\My_Elio\AI-Skill-Roundtable'
+allowed_commands = ['jianyu_compile_test', 'jianyu_lint_assemble']
+
 [commands.life_android_resource]
 argv = ['{python}', 'D:\My\_Elio\agy-worker\scripts\build-life-archive.py']
 external_host = 'HBuilderX'
@@ -31,6 +35,12 @@ argv = ['D:\Program Files\nodejs\node.exe', 'scripts/markdown-smoke.mjs']
 
 [commands.life_node_tests]
 argv = ['D:\Program Files\nodejs\node.exe', '--test', 'tests/*.test.mjs']
+
+[commands.jianyu_compile_test]
+argv = ['cmd.exe', '/c', 'gradlew.bat', '--no-daemon', '-Dkotlin.compiler.execution.strategy=in-process', 'compileDebugKotlin', 'testDebugUnitTest']
+
+[commands.jianyu_lint_assemble]
+argv = ['cmd.exe', '/c', 'gradlew.bat', '--no-daemon', '-Dkotlin.compiler.execution.strategy=in-process', 'lintDebug', 'assembleDebug']
 
 [browser]
 command = 'D:\Program Files\nodejs\node.exe'
