@@ -1,5 +1,6 @@
 """最终代码质量审查发现的 Controller 生命周期回归用例。"""
 import importlib.util
+import json
 import os
 import time
 from pathlib import Path
@@ -30,6 +31,20 @@ def make_config(tmp_path):
     config = tmp_path / "runtime.toml"
     config.write_text(f"data_dir = '{data_dir}'\n", encoding="utf-8")
     return config, data_dir
+
+
+class JsonResponse:
+    def __init__(self, value):
+        self.raw = json.dumps(value).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self.raw
 
 
 def test_fresh_start_does_not_treat_unreachable_existing_state_as_not_running(
@@ -108,6 +123,58 @@ def test_stale_controller_environment_files_are_cleaned_without_touching_fresh_f
     assert not stale.exists()
     assert not legacy.exists()
     assert fresh.exists()
+
+
+def test_stop_waits_for_state_disappearance_after_health_disconnect(tmp_path, monkeypatch):
+    """HTTP 先消失而 state 尚未 unlink 时，stop 不得提前宣告完整退出。"""
+    config, data_dir = make_config(tmp_path)
+    state_path = data_dir / "controller.json"
+    state = {
+        "protocol_version": 2,
+        "pid": 41001,
+        "endpoint": "http://127.0.0.1:43123",
+        "token": "d" * 64,
+        "config_path": str(config.resolve()),
+        "started_at": "2026-09-09T12:00:00Z",
+        "instance_id": "a" * 32,
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    original_management_state = ControllerClient._management_state
+    management_reads = 0
+
+    def staged_management_state(config_path, observed_state_path):
+        nonlocal management_reads
+        management_reads += 1
+        if management_reads >= 3:
+            observed_state_path.unlink(missing_ok=True)
+            return None
+        return original_management_state(config_path, observed_state_path)
+
+    class StopThenDisconnectOpener:
+        def open(self, request, timeout=None):
+            if request.full_url.endswith("/control/stop"):
+                return JsonResponse({"ok": True, "status": "stopping"})
+            if request.full_url.endswith("/control/health"):
+                raise controller_client_module.urllib.error.URLError("listener already closed")
+            raise AssertionError(f"unexpected request: {request.full_url}")
+
+    monkeypatch.setattr(
+        ControllerClient,
+        "_management_state",
+        staticmethod(staged_management_state),
+    )
+    monkeypatch.setattr(
+        controller_client_module.urllib.request,
+        "build_opener",
+        lambda *args, **kwargs: StopThenDisconnectOpener(),
+    )
+
+    result = ControllerClient.stop_existing(config, timeout=1)
+
+    assert result == {"ok": True, "status": "stopped"}
+    assert management_reads >= 3
+    assert not state_path.exists()
 
 
 @pytest.mark.skipif(
