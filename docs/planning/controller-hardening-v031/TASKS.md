@@ -25,10 +25,10 @@
 ## 当前总状态
 
 ```text
-phase: planning
+phase: t1_red
 production_code_changed: false
-user_plan_approval: pending
-local_test_evidence_for_this_branch: none
+user_plan_approval: approved_2026-09-09
+local_test_evidence_for_this_branch: awaiting_t1_red
 open_pr: none
 merge_authorized: false
 ```
@@ -37,7 +37,7 @@ merge_authorized: false
 
 | ID | Priority | 任务 | ChatGPT | 本地 AI | 当前状态 |
 |---|---|---|---|---|---|
-| T1 | P0 | Controller v2 身份 / stale config & implementation | 实现、审查 | RED/GREEN | `planned` |
+| T1 | P0 | Controller v2 身份 / stale config & implementation | 实现、审查 | RED/GREEN | `red_written` |
 | T2 | P0 | 跨协议显式 stop + `--config` stop | 实现、审查 | RED/GREEN + Windows stop | `planned` |
 | T3 | P0 | 启动锁 takeover / launch retry | 实现、审查 | RED/GREEN + WMI lifecycle | `planned` |
 | T4 | P0 | custom `run-task --config` ownership / cleanup | 实现、审查 | RED/GREEN + no-leak | `planned` |
@@ -49,7 +49,7 @@ merge_authorized: false
 
 ## T1 — Controller v2 身份 / stale 检测
 
-**Status:** `planned`
+**Status:** `red_written`
 
 **必须交付：**
 
@@ -67,7 +67,19 @@ merge_authorized: false
 **RED evidence:**
 
 ```text
-not run
+Tests committed:
+- 0c2d10d1ec791800aeef4e41eef3ce7e8c043121  tests/test_controller_security.py
+- cb79ddef52c3372c6ca9f5a6b8af8f9d96fc02f4  tests/test_controller.py identity/stale cases
+
+Required local execution:
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller_security.py
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller.py -k "stale or identity"
+
+Expected RED:
+- security tests fail because v0.3 does not validate strict v2 state/endpoint before network access;
+- identity/stale tests fail because v0.3 publishes protocol 1 without frozen config/implementation/instance identity and does not reject a stale running Controller.
+
+Actual local output: pending
 ```
 
 **GREEN evidence:**
@@ -79,13 +91,13 @@ not run
 **Commit:**
 
 ```text
-not created
+production implementation not created; TDD gate waiting for RED evidence
 ```
 
 **Review findings:**
 
 ```text
-none yet
+RED test design review: assertions target externally observable WorkerError codes/state identity and network-before-validation behavior; no source-text grep assertions.
 ```
 
 ## T2 — 跨协议显式 stop / custom config stop
@@ -298,10 +310,9 @@ none yet
 ## 下一动作
 
 ```text
-等待用户审核 SPEC.md / PLAN.md
-→ 用户确认
-→ T1 写失败测试
-→ 提交 red test
-→ 本地 AI 执行 RED
-→ ChatGPT 开始生产实现
+本地 AI 拉取 fix/controller-hardening-v031
+→ 执行 T1 两组 RED 命令并返回完整 pytest 摘要/失败原因
+→ ChatGPT 技术复核 RED 证据
+→ T1 状态改为 red_verified
+→ ChatGPT 才开始 T1 生产实现
 ```
