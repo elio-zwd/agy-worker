@@ -1,16 +1,16 @@
 """Controller 连接元数据与凭据目录必须提供可验证的本机安全诊断。"""
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
 import agy_worker.controller_state as controller_state_module
-import agy_worker.runtime as runtime_module
+import agy_worker.manage as manage_module
 import agy_worker.security as security_module
 from agy_worker.common import WorkerError
 from agy_worker.controller_client import ControllerClient
-from agy_worker.runtime import Runtime
 from agy_worker.security import classify_broad_read_principals, inspect_data_dir_acl
 
 
@@ -202,19 +202,43 @@ def test_acl_api_failure_is_unknown_not_safe(tmp_path, monkeypatch):
     assert "ACL API unavailable" in report["error"]
 
 
-def test_capabilities_reports_acl_unknown_without_failing(tmp_path, monkeypatch):
-    runtime = object.__new__(Runtime)
-    runtime.root = tmp_path
-    runtime.config = {"enabled_kinds": [], "workspaces": {}}
+def test_doctor_reports_acl_unknown_without_claiming_isolation(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    config_dir = root / "config"
+    config_dir.mkdir(parents=True)
+    data_dir = root / "work-data"
+    data_dir.mkdir()
+    agy = root / "agy.exe"
+    browser = root / "browser.exe"
+    agy.write_bytes(b"agy")
+    browser.write_bytes(b"browser")
+    (config_dir / "runtime.toml").write_text(
+        f"data_dir = '{data_dir}'\n"
+        "enabled_kinds = []\n"
+        "[agy]\n"
+        f"executable = '{agy}'\n"
+        "[browser]\n"
+        f"args = ['{browser}']\n",
+        encoding="utf-8",
+    )
     unknown = {
         "checked": False,
         "broad_read_principals": [],
         "token_confidentiality_advisory": False,
         "error": "mock failure",
     }
-    monkeypatch.setattr(runtime_module, "inspect_data_dir_acl", lambda _path: unknown)
+    help_text = "--conversation --output-format --new-project --add-dir --print-timeout"
+    monkeypatch.setattr(manage_module, "ROOT", root)
+    monkeypatch.setattr(manage_module, "digest", lambda _path: "mock-sha256")
+    monkeypatch.setattr(manage_module, "inspect_data_dir_acl", lambda _path: unknown, raising=False)
+    monkeypatch.setattr(
+        manage_module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, help_text, ""),
+    )
 
-    capabilities = runtime.capabilities()
+    manage_module.doctor()
+    report = json.loads((root / "work" / "doctor.json").read_text("utf-8"))
 
-    assert capabilities["controller"]["data_dir_acl"] == unknown
-    assert capabilities["permissions"]["os_isolation"] is False
+    assert report["data_dir_acl"] == unknown
+    assert report["os_isolation"] is False
