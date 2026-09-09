@@ -8,6 +8,12 @@ Codex/GPT 负责需求、总控、判断、源码分析和核心修改。AGY 负
 
 实际链路：Codex → 一次性 stdio Bridge → 常驻 Controller / 唯一 Runtime → 每轮独立 AGY CLI → 私有 Broker → 已授权执行器。Bridge 只处理 MCP 与本机转发；Controller 掌握命令、退出码、取消与证据，不能用 AGY 自称成功替代进程和产物验证。
 
+### v0.3.1 Controller 加固状态
+
+`fix/controller-hardening-v031` 已实现协议 v2 与 Controller 身份冻结、stale 配置/实现检测、跨协议显式停止、custom config Controller 生命周期、启动锁接管重试、status 重连预算、最多 16 个 inflight 的背压、queued 立即取消，以及 data_dir ACL advisory。**这些新增行为在最终 Windows 本地验收完成前只视为“代码已实现、待验收”，不能据此宣称全部运行验证已通过。**
+
+v0.3.1 不会自动停止或自动重启 stale Controller。新 Bridge 发现后台实例仍运行旧配置或旧实现时会 fail-closed，并要求维护者显式停止；未完成任务仍遵循“Controller 重启后标记 interrupted、不自动重做”的既有边界。
+
 ## 当前可用范围
 
 | 能力 | 本次状态 |
@@ -35,13 +41,31 @@ pwsh.exe -NoProfile -File scripts/register.ps1
 
 `register.ps1` 登记 AGY 私有 Broker 及 Codex 的 `agy_worker`，保留其他 MCP。Codex 原配置备份在 `work/backups`，这些备份可能包含敏感配置，请勿提交。重新安装使用 `scripts/install.ps1 -Python <Python完整路径>`，依赖锁定在 `requirements.lock` 和 `vendor/browser/package-lock.json`。
 
-同一数据目录仍只允许一个 Runtime，但可以同时存在多个 stdio Bridge。Bridge 同时首次连接时用启动锁协调，最终只有一个 Controller 取得 `runtime.lock`；Bridge 关闭不会停止 Controller 或任务。显式停止使用：
+同一数据目录仍只允许一个 Runtime，但可以同时存在多个 stdio Bridge。Controller 继续只有 1 个执行槽；v0.3.1 最多接受 16 个排队或运行中的 inflight 任务，第 17 个新的逻辑请求返回 `worker_busy`。同 `request_id`、同 fingerprint 的幂等重试在容量已满时仍返回原 task；queued Future 若尚未开始执行，`agy_cancel` 会直接进入 `cancelled`，无需等待前面的任务释放执行槽。
+
+Bridge 同时首次连接时用启动锁协调。v0.3.1 的 `_ensure()` 会在同一 deadline 内重复尝试取得 launch lock，并在前一个启动者失败后接管；WMI 返回的创建 PID只用于 ownership/诊断，真正 ready 仍以带 Bearer 的 health 为准。
+
+显式停止默认正式配置：
 
 ```powershell
 pwsh.exe -NoProfile -File scripts/stop.ps1
 ```
 
-停止会取消仍在运行的任务；再次调用工具会自动拉起 Controller。Controller 连接元数据保存在 `data/controller.json`，包含仅供当前本机 Bridge 使用的随机凭据；监听地址固定为 `127.0.0.1`。凭据安全依赖当前 Windows 用户及目录 ACL，当前版本仍不是系统安全沙箱。`start.ps1` 是 stdio Bridge 入口，不是供人输入命令的窗口。
+停止指定 Runtime 配置：
+
+```powershell
+pwsh.exe -NoProfile -File scripts/stop.ps1 -Config 'D:\path\runtime.toml'
+# 或
+.venv/Scripts/python.exe -m agy_worker.manage stop --config 'D:\path\runtime.toml'
+```
+
+v0.3.1 的显式停止允许管理端读取 legacy v1 state，并用旧实例 state 自己的 `protocol_version` 发起停止；当前 v2 的 `/control/stop` 在 Bearer 鉴权成功后不再要求业务协议一致，但 `/control/call` 仍严格要求当前协议。停止会等待目标实例真正消失；若 state 已被 replacement instance 替换，则停止流程不会继续向新实例发送控制请求。
+
+Controller 连接元数据保存在 `data/controller.json`。v2 state 包含 `protocol_version`、`implementation_version`、`implementation_sha256`、`config_sha256`、`instance_id`、PID、loopback endpoint、随机 token、config_path 和 started_at。endpoint 只接受精确的 `http://127.0.0.1:<port>`；不接受 localhost、0.0.0.0、IPv6、凭据、额外 path、query 或 fragment。state/health/当前磁盘实现身份必须一致才能用于普通业务调用。
+
+Controller token 的保密性仍依赖本机用户和目录 ACL。`doctor` 在 v0.3.1 增加 data_dir ACL advisory：只报告是否成功检查、明显的宽泛读取主体和 token confidentiality 风险；检查失败显示 unknown，不会把未知状态当安全，也不会自动修改 ACL。此诊断不构成 Windows sandbox 或 effective-access 证明。
+
+`start.ps1` 是 stdio Bridge 入口，不是供人输入命令的窗口。
 
 ## 公开 MCP 工具与资源
 
@@ -54,17 +78,27 @@ pwsh.exe -NoProfile -File scripts/stop.ps1
 | `agy_cancel` | 取消排队/运行任务，可重复调用 |
 | `agy_artifact_read` | 按证据 ID 读取元数据、最多 200 行文本或图片 |
 
-精确字段以 `schemas/*.json` 为准。MCP Resources 同时提供只读的 `agy://capabilities` 和 `agy://workspaces`；资源模板查询返回空列表，不再产生 Method not found。`request_id` 用于幂等：同 ID 同内容不会重复执行，同 ID 不同内容拒绝。每轮重新授权，续会话不代表继承额外权限。
+精确字段以 `schemas/*.json` 为准。MCP Resources 同时提供只读的 `agy://capabilities` 和 `agy://workspaces`；资源模板查询返回空列表，不再产生 Method not found。每轮重新授权，续会话不代表继承额外权限。
+
+### request_id 合同
+
+`request_id` 用于整个 `data_dir` 历史范围内的幂等键。新逻辑请求推荐生成：
+
+```text
+req-<uuid4hex>
+```
+
+例如 `req-7d3f1b3c0b1e4f91a8c7e2d4f6a9b123`。每个新的逻辑请求、每个新的续轮都使用新的 ID；**只有同一个逻辑请求的 transport/reconnect 重试才复用原 request_id**。同 ID 同内容返回已有 task，同 ID 不同内容返回 `idempotency_conflict`。历史 ID 不因任务终态或 Controller 重启而自动释放，本次不修改 SQLite schema。
 
 `workspace_id` 是 `agy_capabilities` 返回的登记别名，不是文件路径。对于任何已登记 Git 仓库，可通过额外的 `workspace_path` 指向该仓库由 Git 正式登记的主工作树或分离 worktree。Runtime 会校验 worktree 根目录、Git common-dir 和 `git worktree list`；其他仓库、普通目录、仓库子目录及不存在路径都会拒绝。续会话绑定首次使用的实际路径，不能中途换 worktree。
 
-一般省略 `limits` 使用服务端默认值。当前 `summary_max_bytes` 范围为 2048～16384，`artifact_max_bytes` 范围为 1048576～536870912；越界错误会返回字段、上下限和调用 `agy_capabilities` 的提示。
+一般省略 `limits` 使用服务端默认值。当前 `summary_max_bytes` 范围为 2048～16384，`artifact_max_bytes` 范围为 1048576～536870912；越界错误会返回字段、上下限和调用 `agy_capabilities` 的提示。Codex MCP 注册的外层 `tool_timeout_sec` 为 60 秒；Controller status 单次 HTTP timeout 仍为 30 秒。若 long-poll 的第一次请求因 `controller_unavailable` 重连，第二次 status 保留 `task_id/after_revision` 但强制 `wait_ms=0`，避免重复消耗长等待预算。
 
 编译真实项目示例：
 
 ```json
 {
-  "request_id": "life-build-20260908-a",
+  "request_id": "req-9a4c2e71f0b84d5c8f3a6b1e7d2c4f90",
   "workspace_id": "life_archive",
   "workspace_path": "D:\\My_Elio\\life-archive-performance-verification",
   "kind": "build",
@@ -81,13 +115,15 @@ pwsh.exe -NoProfile -File scripts/stop.ps1
 .venv/Scripts/python.exe scripts/run-task.py examples/life-archive-build.json --output work/local-result.json
 ```
 
-示例的 request_id 固定，再执行会返回原任务。需要新一轮时改为新 ID，或按接口传入续会话信息。可直接向 Codex 说：“用 agy_worker 编译 life_archive，只采集报错，不修改代码。”
+显式 `--config <runtime.toml>` 时，`run-task.py` 会在进入 stdio Bridge 前建立 ownership-aware Controller client：若这次 invocation 自己启动了 custom Controller，默认在 `finally` 中只停止同一个 `instance_id`；预先存在的 Controller 不会被它清理。需要保留本次新启动的 custom Controller 时可加 `--keep-controller`。未传 `--config` 时正式 Controller 继续常驻。
+
+示例文件里的 request_id 只是静态示意；重复运行同一示例会按幂等合同返回原任务。需要新一轮真实执行时请生成新的 `req-<uuid4hex>`，不要通过修改内容复用旧 ID。可直接向 Codex 说：“用 agy_worker 编译 life_archive，只采集报错，不修改代码。”
 
 浏览器示例：
 
 ```json
 {
-  "request_id": "browser-observe-001", "workspace_id": "demo", "kind": "browser",
+  "request_id": "req-4be2a06d98f24c62a1d7e53f0b8c9a11", "workspace_id": "demo", "kind": "browser",
   "objective": "打开指定网页，读取标题与正文并保存截图，返回观察结果与证据引用。",
   "permissions": {"browser": true, "origins": ["https://example.com"]},
   "inputs": {"url": "https://example.com"}
@@ -96,9 +132,11 @@ pwsh.exe -NoProfile -File scripts/stop.ps1
 
 图片示例：`kind=vision`，`permissions.vision=true`，`inputs.files=["colors.png"]`，workspace_id 为 demo。日志任务对应 `kind=log`、`permissions.log=true` 和单个已登记工作区内的文件。
 
-## 维护者辅助清洗
+## 维护者辅助清洗流程
 
-Codex 可以把依赖源码、长日志或大段终端输出作为只读文本任务交给 AGY 清洗，Codex 仍是实施主体。此模式要求目标只写“提取事实、定位和证据行号”，不让 AGY 判断架构、分析本项目根因或修改文件。AGY 的摘要必须由 Codex 回看原始证据后再用于改代码。
+Codex 可以把依赖源码、长日志或大段终端输出作为只读文本任务交给 AGY 清洗，Codex 仍是实施主体。此流程要求目标只写“提取事实、定位和证据行号”，不让 AGY 判断架构、分析本项目根因或修改文件。AGY 的摘要必须由 Codex 回看原始证据后再用于改代码。
+
+**“维护者辅助清洗流程”是维护者的调用约定，不是 Runtime-enforced `analysis_level` 模式。** 当前公开 MCP schema 没有 `analysis_level=extract_only` 等字段；真正由 Runtime 强制执行的仍是任务 kind、permissions、已登记 command、hook + 私有 Broker、路径/容量/超时等边界。不能把提示词里的“只提取”描述成系统安全控制。
 
 需要检查尚未登记的依赖目录时，维护者可创建独立 Runtime 配置和数据目录，再用 `scripts/run-task.py --config <配置>` 运行；这不会扩大正式 Controller 的工作区。2026-09-09 已用此方式读取 MCP SDK 的 stdio 终止代码，AGY 只返回 Windows Job Object、两秒退出宽限和后代进程清理的行号证据，`source_changed=false`。
 
