@@ -1,0 +1,138 @@
+# AGY Worker 本地部署
+
+部署位置：`D:\My\_Elio\agy-worker`。宿主：Windows x64、PowerShell 7、Python 3.13。此安装复用已登录的 AGY CLI，并登记为 Codex 的 stdio MCP。
+
+## 分工
+
+Codex/GPT 负责需求、总控、判断、源码分析和核心修改。AGY 负责执行受控任务、读取高噪声内容、整理事实和证据。编译任务只采集错误原文与定位，不分析原因、不修代码。浏览器的 click 等细节只存在于 Worker 内部，不作为 Codex 的公开工具。
+
+实际链路：Codex → 能力发现与五个任务接口 → Runtime → 每轮独立 AGY CLI → 私有 Broker → 已授权执行器。Runtime 掌握命令、退出码、取消与证据；不能用 AGY 自称成功替代进程和产物验证。
+
+## 当前可用范围
+
+| 能力 | 本次状态 |
+|---|---|
+| 编译、测试、日志清洗 | 已启用；命令必须由本地配置登记 |
+| 浏览器 | 已启用；独立无头 Edge，支持观察、截图、console/network；交互另需 `browser_interact` |
+| 图片 | 已启用；真实 PNG/JPEG 输入，经 MCP 图片内容交给 AGY |
+| Android / Logcat | 保留接口设计，未启用；尚未完成设备与包范围验收 |
+| 任意 shell、源码写入 | 拒绝，包括传入 `code_write=true`；等待系统隔离验收 |
+
+**权限边界的实际强度：当前是 hook + Broker 的工具授权，不是 Windows 安全沙箱。** AGY 和已登记命令使用当前用户身份。项目副本避免常规构建写入原源码，但不是防恶意代码的隔离环境；已有 node_modules 通过 junction 复用，未设置系统只读权限。不要把这个版本用于不可信仓库的任意构建。浏览器 origins 校验覆盖入口 URL，不是重定向、子资源和网络出口防火墙。
+
+AGY 原生写文件、原生命令、其他 MCP 被 hook 拒绝；允许的只有私有 Broker、结束/等待工具及 Broker 的一个本地工具描述文件。实测未授权写文件被阻止。未更改用户 AGY 账号、默认模型或既有浏览器 MCP 配置。
+
+## 启动与接入
+
+安装后由 Codex 按需启动，不需要常驻窗口或计划任务。重新加载 MCP 或重启 Codex 后生效。
+
+```powershell
+Set-Location 'D:\My\_Elio\agy-worker'
+pwsh.exe -NoProfile -File scripts/doctor.ps1
+pwsh.exe -NoProfile -File scripts/check.ps1
+pwsh.exe -NoProfile -File scripts/register.ps1
+```
+
+`register.ps1` 登记 AGY 私有 Broker 及 Codex 的 `agy_worker`，保留其他 MCP。Codex 原配置备份在 `work/backups`，这些备份可能包含敏感配置，请勿提交。重新安装使用 `scripts/install.ps1 -Python <Python完整路径>`，依赖锁定在 `requirements.lock` 和 `vendor/browser/package-lock.json`。
+
+当前同一数据目录仅允许一个 Runtime。Codex 已连接后不要同时运行独立验收客户端；它会明确返回占用错误。`start.ps1` 是 stdio 服务入口，不是供人输入命令的窗口。
+
+## 公开 MCP 工具与资源
+
+| 工具 | 用途 |
+|---|---|
+| `agy_capabilities` | 查询参数范围、工作区、已登记命令、已知 worktree 和实际安全能力；提交任务前优先调用 |
+| `agy_worker` | 提交任务，立即返回 task_id、session_id 和状态 |
+| `agy_continue` | 同工作区续轮；必须传 session_id、expected_turn 及完整任务授权 |
+| `agy_status` | 查询或最多等待 25 秒；after_revision 避免重复轮询 |
+| `agy_cancel` | 取消排队/运行任务，可重复调用 |
+| `agy_artifact_read` | 按证据 ID 读取元数据、最多 200 行文本或图片 |
+
+精确字段以 `schemas/*.json` 为准。MCP Resources 同时提供只读的 `agy://capabilities` 和 `agy://workspaces`；资源模板查询返回空列表，不再产生 Method not found。`request_id` 用于幂等：同 ID 同内容不会重复执行，同 ID 不同内容拒绝。每轮重新授权，续会话不代表继承额外权限。
+
+`workspace_id` 是 `agy_capabilities` 返回的登记别名，不是文件路径。对于任何已登记 Git 仓库，可通过额外的 `workspace_path` 指向该仓库由 Git 正式登记的主工作树或分离 worktree。Runtime 会校验 worktree 根目录、Git common-dir 和 `git worktree list`；其他仓库、普通目录、仓库子目录及不存在路径都会拒绝。续会话绑定首次使用的实际路径，不能中途换 worktree。
+
+一般省略 `limits` 使用服务端默认值。当前 `summary_max_bytes` 范围为 2048～16384，`artifact_max_bytes` 范围为 1048576～536870912；越界错误会返回字段、上下限和调用 `agy_capabilities` 的提示。
+
+编译真实项目示例：
+
+```json
+{
+  "request_id": "life-build-20260908-a",
+  "workspace_id": "life_archive",
+  "workspace_path": "D:\\My_Elio\\life-archive-performance-verification",
+  "kind": "build",
+  "objective": "执行 Android 资源导出，只报告是否成功、错误原文和定位，不分析原因、不修改源码。",
+  "permissions": {"build": true, "log": true, "code_write": false},
+  "inputs": {"command_id": "life_android_resource"},
+  "limits": {"total_timeout_sec": 1200, "summary_max_bytes": 16384}
+}
+```
+
+独立验收方式（仅在 Codex 未占用 Runtime 时）：
+
+```powershell
+.venv/Scripts/python.exe scripts/run-task.py examples/life-archive-build.json --output work/local-result.json
+```
+
+示例的 request_id 固定，再执行会返回原任务。需要新一轮时改为新 ID，或按接口传入续会话信息。可直接向 Codex 说：“用 agy_worker 编译 life_archive，只采集报错，不修改代码。”
+
+浏览器示例：
+
+```json
+{
+  "request_id": "browser-observe-001", "workspace_id": "demo", "kind": "browser",
+  "objective": "打开指定网页，读取标题与正文并保存截图，返回观察结果与证据引用。",
+  "permissions": {"browser": true, "origins": ["https://example.com"]},
+  "inputs": {"url": "https://example.com"}
+}
+```
+
+图片示例：`kind=vision`，`permissions.vision=true`，`inputs.files=["colors.png"]`，workspace_id 为 demo。日志任务对应 `kind=log`、`permissions.log=true` 和单个已登记工作区内的文件。
+
+## 真实项目绑定
+
+源项目是 **`D:\My_Elio\life-archive-app`**，与 Worker 的 `D:\My\_Elio` 路径不同。该项目为 HBuilderX / uni-app，不使用 Gradle。
+
+Runtime 复制 Git 跟踪文件、未忽略的未跟踪文件，以及已初始化子模块中的同类文件，包含当前未提交内容。不会复制 .git、既有构建产物、AGY hooks 等。复制到 `data/sessions/<session_id>` 后再构建；续轮重新同步输入。未初始化子模块不自动联网拉取。
+
+已登记命令：
+
+- `life_android_resource`：将本轮副本导入现有 HBuilderX，调用项目已有 Android 导出脚本，校验本轮新生成的资源 manifest，最后关闭副本项目。
+- `life_markdown_check`：运行项目既有 Markdown 检查。
+- `life_node_tests`：运行项目 Node 测试。
+
+**Android 资源导出不等于 APK 打包、安装或真机测试。** 不触发云打包。HBuilderX 某些业务失败返回 0，因此包装器同时检查错误文字和新产物，避免假成功。原项目脚本未被修改。
+
+## 结果和证据
+
+任务目录 `data/tasks/<task_id>` 保存 request.json、permissions.json、audit.ndjson、result.json、manifest.json、raw 日志、脱敏日志与截图。manifest 带 SHA-256、大小、类型和敏感标记。状态摘要限制最多 16 KiB；更多证据按 ID 读取。原始敏感日志只能本机查看，不通过普通 artifact 文本读取接口返回。
+
+编译摘要区分 AGY 执行状态与实际命令退出码。错误列表保留原文、可提取的文件/行列、Gradle task（如存在）及日志行引用；编译器未提供行列时返回 null，不编造。stdout 和 stderr 原始文件分开保存，合并日志是 stdout 后接 stderr，不能据此推断跨流时间顺序。
+
+默认不自动删除日志和会话副本，避免丢失证据。当前没有自动留存清理任务；本机磁盘需要自行管理，建议确认任务结束、导出证据后定期清理。取消通过 Windows Job Objects 终止本轮创建的进程树；既有共享 HBuilderX 可能继续已经提交的导出，不强杀用户 GUI。服务重启将未完成任务标为 interrupted，不自动重做外部操作。
+
+## 目录
+
+```text
+config/runtime.toml       本机能力、工作区、固定命令
+src/agy_worker/           MCP、任务控制、Broker、hook、执行与证据模块
+scripts/                 安装、检查、注册、运行和 HBuilderX 适配器
+schemas/                 六个公开工具的 JSON Schema
+examples/                样例请求和最小验证项目
+tests/                   权限、状态、路径、进程树和快照回归测试
+vendor/browser/          锁定的浏览器 MCP 依赖
+docs/                    实施设计与验收记录
+data/                    会话副本、SQLite 状态和任务证据（不提交 Git）
+work/                    诊断脚本、配置备份和验收中间结果（不提交 Git）
+```
+
+## 后续阶段
+
+1. 已完成任务控制、AGY direct CLI、日志/构建端到端；系统隔离验收仍未完成。
+2. 已完成浏览器观察/截图端到端；进一步验收交互、网络范围及敏感字段处理。
+3. Android：按设备序列号和包名授权，先验收观察/Logcat，再启用点击、滑动与输入。
+4. 已完成真实图片读取；扩展多图证据对比及精度验证。
+5. 增强 Windows 账户/沙箱、工具链与网络隔离、审计留存。通过源码只读隔离验收后，才能设计有明确路径和理由的 code_write 授权。独立 Git worktree 可用于后续有意修改源码的任务，不能把 worktree 当作系统安全边界。
+
+卸载连接使用 `scripts/uninstall.ps1`；默认保留所有代码和证据，不递归删除用户文件。

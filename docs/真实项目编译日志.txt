@@ -1,0 +1,39 @@
+正在导入项目...
+
+项目导入成功
+
+
+
+
+[build:app-android] project: D:\My\_Elio\agy-worker\data\sessions\session-8fab10e744274307b875dd5d6aec1ea1
+[build:app-android] cli: D:\HBuilderX\HBuilderX\cli.exe
+[build:app-android] type: appResource
+23:08:42.490 项目 session-8fab10e744274307b875dd5d6aec1ea1 开始导出...
+
+23:08:46.125 编译器版本：5.24（vue3）
+
+23:08:46.127 正在编译中...
+
+23:08:46.131 编译会生成大量临时文件，杀毒软件监控时会影响编译速度，并造成CPU升高。推荐把项目目录添加到杀毒软件的监控排除名单中。[添加] [帮助]
+
+23:08:48.160 [33m​uni_modules/uni-config-center, uni_modules/uni-id-common 使用了uniCloud，而项目未启用uniCloud。需在项目点右键创建uniCloud环境​[39m
+
+23:09:19.771 [33m​​[plugin:vite:reporter]  ​[39m
+
+23:09:19.773 [33m​(!) D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/utils/markdown.js is dynamically imported by D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/composables/useNoteExport.js but also statically imported by D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/components/AppMarkdown.vue, D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/composables/useRAG.js, D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/composables/useTags.js, dynamic import will not move module into another chunk.​[39m
+
+23:09:19.774 [33m​​​[39m
+
+23:09:24.618 项目 session-8fab10e744274307b875dd5d6aec1ea1 编译成功。
+
+23:09:24.889 项目 session-8fab10e744274307b875dd5d6aec1ea1 正在导出...
+
+23:09:25.039 [33m项目 session-8fab10e744274307b875dd5d6aec1ea1 导出成功，路径为：D:\My\_Elio\agy-worker\data\sessions\session-8fab10e744274307b875dd5d6aec1ea1\unpackage\resources[39m
+
+23:09:25.040 wgt文件由HBuilderX 5.24 版本生成，运行的基座sdk也需配套相同版本，否则在手机端部分功能可能无法正常使用。详见 http://ask.dcloud.net.cn/article/35627
+
+
+
+
+Android 资源导出验证成功：D:\My\_Elio\agy-worker\data\sessions\session-8fab10e744274307b875dd5d6aec1ea1\unpackage\resources\__UNI__D5BF11F\www
+项目关闭完成

@@ -1,0 +1,20 @@
+{
+  "errors": [],
+  "warnings": [
+    {
+      "file": null,
+      "line": null,
+      "column": null,
+      "message": "23:09:19.773 \u001b[33m​(!) D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/utils/markdown.js is dynamically imported by D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/composables/useNoteExport.js but also statically imported by D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/components/AppMarkdown.vue, D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/composables/useRAG.js, D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/composables/useTags.js, dynamic import will not move module into another chunk.​\u001b[39m",
+      "raw": "23:09:19.773 \u001b[33m​(!) D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/utils/markdown.js is dynamically imported by D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/composables/useNoteExport.js but also statically imported by D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/components/AppMarkdown.vue, D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/composables/useRAG.js, D:/My/_Elio/agy-worker/data/sessions/session-8fab10e744274307b875dd5d6aec1ea1/composables/useTags.js, dynamic import will not move module into another chunk.​\u001b[39m",
+      "task": null,
+      "count": 1,
+      "evidence": {
+        "artifact_id": "operation-log",
+        "start_line": 23,
+        "end_line": 23
+      }
+    }
+  ],
+  "total_lines": 43
+}
