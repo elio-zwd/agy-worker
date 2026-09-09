@@ -1,8 +1,11 @@
 """Controller 连接元数据必须在任何网络访问前完成严格校验。"""
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
+import agy_worker.controller_state as controller_state_module
 from agy_worker.common import WorkerError
 from agy_worker.controller_client import ControllerClient
 
@@ -133,3 +136,27 @@ def test_stale_hash_is_not_reported_before_authenticated_health(tmp_path, monkey
 
     assert caught.value.code == "controller_unavailable"
     assert opener.called is True
+
+
+def test_controller_implementation_digest_matches_fixed_persistent_module_set():
+    """实现摘要必须严格遵守已批准计划中的固定常驻模块集合。"""
+    relative_files = (
+        "controller.py",
+        "controller_protocol.py",
+        "runtime.py",
+        "common.py",
+        "models.py",
+        "artifacts.py",
+        "logs.py",
+        "processes.py",
+        "browser.py",
+    )
+    root = Path(controller_state_module.__file__).resolve().parent
+    expected = hashlib.sha256()
+    for relative in sorted(relative_files):
+        expected.update(relative.encode("utf-8"))
+        expected.update(b"\0")
+        expected.update((root / relative).read_bytes())
+        expected.update(b"\0")
+
+    assert controller_state_module.controller_implementation_sha256() == expected.hexdigest()
