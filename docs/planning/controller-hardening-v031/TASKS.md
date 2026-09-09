@@ -25,10 +25,10 @@
 ## 当前总状态
 
 ```text
-phase: t1_implementation
-production_code_changed: false
+phase: t1_green
+production_code_changed: true
 user_plan_approval: approved_2026-09-09
-local_test_evidence_for_this_branch: t1_red_verified
+local_test_evidence_for_this_branch: t1_red_verified_green_pending
 open_pr: none
 merge_authorized: false
 ```
@@ -37,7 +37,7 @@ merge_authorized: false
 
 | ID | Priority | 任务 | ChatGPT | 本地 AI | 当前状态 |
 |---|---|---|---|---|---|
-| T1 | P0 | Controller v2 身份 / stale config & implementation | 实现、审查 | RED/GREEN | `red_verified` |
+| T1 | P0 | Controller v2 身份 / stale config & implementation | 实现、审查 | RED/GREEN | `green_written` |
 | T2 | P0 | 跨协议显式 stop + `--config` stop | 实现、审查 | RED/GREEN + Windows stop | `planned` |
 | T3 | P0 | 启动锁 takeover / launch retry | 实现、审查 | RED/GREEN + WMI lifecycle | `planned` |
 | T4 | P0 | custom `run-task --config` ownership / cleanup | 实现、审查 | RED/GREEN + no-leak | `planned` |
@@ -49,7 +49,7 @@ merge_authorized: false
 
 ## T1 — Controller v2 身份 / stale 检测
 
-**Status:** `red_verified`
+**Status:** `green_written`
 
 **必须交付：**
 
@@ -96,19 +96,33 @@ Technical evaluation:
 **GREEN evidence:**
 
 ```text
-not run
+pending local execution
+
+Required:
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller_security.py
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller.py -k "identity or stale or two_stdio or restart"
 ```
 
-**Commit:**
+**Implementation commits:**
 
 ```text
-production implementation not created yet
+1d511a79942e698720f36951f21f2ba63d2d2783  fix: 增加Controller身份状态模型
+42658007cf0454ab5a361cdc7d0229e7d001ccda  fix: 升级Controller本地协议版本
+64f9d35fa114302af7220ce1f04dc67d9e26f5b5  fix: 冻结并发布Controller身份
+afba2d806507f74d57e36e75b8378442f5997f8b  fix: 严格校验Controller状态与身份
+0d3077ab820939fcd0416393c119404e58abae8b  fix: 让Runtime health返回冻结身份
+857e49ec28d239347c83b2a07d3de9431edcbf01  fix: 更新Controller加固版本号
 ```
 
 **Review findings:**
 
 ```text
-RED evidence technically reviewed under receiving-code-review: valid behavioral failures, no test harness blocker found.
+Pre-GREEN static review:
+- changes remain inside T1 file map;
+- six public MCP tool names untouched;
+- stale controller paths fail closed and do not auto-stop/replay;
+- Runtime diff is only +5/-2 around frozen identity/health, no task execution logic drift detected;
+- executable verification is still pending and no PASS claim is made.
 ```
 
 ## T2 — 跨协议显式 stop / custom config stop
@@ -321,9 +335,10 @@ RED evidence technically reviewed under receiving-code-review: valid behavioral 
 ## 下一动作
 
 ```text
-T1 RED 已由本地 AI 验证并由 ChatGPT 技术复核
-→ ChatGPT 实现 Controller v2 identity / state / stale detection
-→ 提交 green candidate
-→ 本地 AI 执行 T1 GREEN
-→ ChatGPT 规格复核 + 代码质量复核
+T1 GREEN candidate 已推送
+→ 本地 AI 刷新本项目 editable package metadata
+→ 执行 T1 两组 GREEN 命令并返回完整 pytest 摘要/失败原因
+→ ChatGPT 技术复核 GREEN 证据
+→ 若通过：T1 状态改为 green_verified 并做规格复核 + 代码质量复核
+→ 若失败：按 systematic-debugging 处理，不进入 T2
 ```
