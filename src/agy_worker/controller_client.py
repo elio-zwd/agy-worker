@@ -37,6 +37,9 @@ class ControllerClient:
         self.current_implementation_sha256 = controller_implementation_sha256()
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.last_launch_pid = None
+        self.started_controller = False
+        self.started_instance_id = None
+        self._launched_pids = set()
         if autostart:
             self.state = self._ensure(startup_timeout)
         else:
@@ -47,6 +50,13 @@ class ControllerClient:
     @staticmethod
     def _invalid_state(message="Controller 连接元数据无效"):
         return WorkerError("controller_state_invalid", message)
+
+    def _accept_healthy_state(self, state):
+        """只有 healthy state 的 PID 对应本 client 真正 launch 的子进程时才宣告 ownership。"""
+        if state and state.get("pid") in self._launched_pids and state.get("instance_id"):
+            self.started_controller = True
+            self.started_instance_id = state["instance_id"]
+        return state
 
     @staticmethod
     def _management_state(config_path, state_path):
@@ -71,7 +81,7 @@ class ControllerClient:
         return value, legacy, endpoint
 
     @staticmethod
-    def stop_existing(config_path, timeout=10):
+    def stop_existing(config_path, timeout=10, expected_instance_id=None):
         """显式停止指定配置的现有 Controller，并等待目标实例真实退出。"""
         config_path = Path(config_path).resolve()
         config = tomllib.loads(config_path.read_text("utf-8"))
@@ -82,6 +92,8 @@ class ControllerClient:
             raise WorkerError("controller_unavailable", "AGY Worker Controller 当前未运行")
 
         raw_state, legacy, endpoint = initial
+        if expected_instance_id is not None and raw_state.get("instance_id") != expected_instance_id:
+            return {"ok": True, "status": "replaced"}
         target_instance_id = raw_state.get("instance_id")
         if not isinstance(target_instance_id, str) or not target_instance_id:
             target_instance_id = None
@@ -326,7 +338,7 @@ class ControllerClient:
         while time.monotonic() < deadline:
             state = self._read_state()
             if self._healthy(state):
-                return state
+                return self._accept_healthy_state(state)
 
             lock_file = lock_path.open("a+b")
             lock_file.seek(0)
@@ -342,11 +354,14 @@ class ControllerClient:
                     # 抢到锁后再次检查，避免另一个 owner 刚刚把 Controller 启好。
                     state = self._read_state()
                     if self._healthy(state):
-                        return state
+                        return self._accept_healthy_state(state)
                     now_monotonic = time.monotonic()
                     if now_monotonic >= next_launch_at:
                         try:
-                            self.last_launch_pid = self._launch()
+                            pid = self._launch()
+                            self.last_launch_pid = pid
+                            if isinstance(pid, int) and pid > 0:
+                                self._launched_pids.add(pid)
                             last_launch_error = None
                         except WorkerError as error:
                             if error.code == "dependency_missing":
