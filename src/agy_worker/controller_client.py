@@ -36,6 +36,7 @@ class ControllerClient:
         self.current_implementation_version = implementation_version()
         self.current_implementation_sha256 = controller_implementation_sha256()
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self.last_launch_pid = None
         if autostart:
             self.state = self._ensure(startup_timeout)
         else:
@@ -270,72 +271,106 @@ class ControllerClient:
         script = (
             "$created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
             "-Arguments @{CommandLine=$env:AGY_WORKER_CONTROLLER_COMMAND}; "
-            "if ($created.ReturnValue -ne 0) { exit $created.ReturnValue }"
+            "if ($created.ReturnValue -ne 0) { exit $created.ReturnValue }; "
+            "Write-Output $created.ProcessId"
         )
-        result = subprocess.run([pwsh, "-NoProfile", "-NonInteractive", "-Command", script],
-                                capture_output=True, text=True, env=environment, timeout=15)
+        result = subprocess.run(
+            [pwsh, "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=15,
+        )
         if result.returncode:
             environment_file.unlink(missing_ok=True)
             raise WorkerError("controller_start_failed", "Windows WMI 无法创建 Controller 进程")
+        try:
+            pid = int(result.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError) as error:
+            raise WorkerError("controller_start_failed", "Windows WMI 未返回有效 Controller PID") from error
+        if pid <= 0:
+            raise WorkerError("controller_start_failed", "Windows WMI 返回了无效 Controller PID")
+        return pid
 
     def _launch(self):
         log_dir = self.data_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         if sys.platform == "win32":
-            self._launch_windows(log_dir)
-            return
+            return self._launch_windows(log_dir)
         stdout = (log_dir / "controller.stdout.log").open("ab")
         stderr = (log_dir / "controller.stderr.log").open("ab")
-        flags = 0
         try:
-            subprocess.Popen(
+            process = subprocess.Popen(
                 [sys.executable, "-m", "agy_worker.controller", "--config", str(self.config_path)],
                 stdin=subprocess.DEVNULL,
                 stdout=stdout,
                 stderr=stderr,
                 close_fds=True,
-                creationflags=flags,
-                start_new_session=sys.platform != "win32",
+                creationflags=0,
+                start_new_session=True,
             )
+            return process.pid
         finally:
             stdout.close()
             stderr.close()
 
     def _ensure(self, startup_timeout):
-        state = self._read_state()
-        if self._healthy(state):
-            return state
+        """在同一 deadline 内反复观察 health、抢启动锁并按 cooldown 重试。"""
+        import msvcrt
 
+        deadline = time.monotonic() + startup_timeout
+        next_launch_at = 0.0
+        last_launch_error = None
         lock_path = self.data_dir / CONTROLLER_LAUNCH_LOCK
-        lock_file = lock_path.open("a+b")
-        lock_file.seek(0)
-        owns_launch = False
-        try:
-            import msvcrt
+
+        while time.monotonic() < deadline:
+            state = self._read_state()
+            if self._healthy(state):
+                return state
+
+            lock_file = lock_path.open("a+b")
+            lock_file.seek(0)
+            acquired = False
             try:
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-                owns_launch = True
-            except OSError:
-                pass
-            if owns_launch:
-                state = self._read_state()
-                if self._healthy(state):
-                    return state
-                self._launch()
-            deadline = time.monotonic() + startup_timeout
-            while time.monotonic() < deadline:
-                state = self._read_state()
-                if self._healthy(state):
-                    return state
-                time.sleep(0.1)
-        finally:
-            if owns_launch:
-                lock_file.seek(0)
                 try:
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    acquired = True
                 except OSError:
                     pass
-            lock_file.close()
+
+                if acquired:
+                    # 抢到锁后再次检查，避免另一个 owner 刚刚把 Controller 启好。
+                    state = self._read_state()
+                    if self._healthy(state):
+                        return state
+                    now_monotonic = time.monotonic()
+                    if now_monotonic >= next_launch_at:
+                        try:
+                            self.last_launch_pid = self._launch()
+                            last_launch_error = None
+                        except WorkerError as error:
+                            if error.code == "dependency_missing":
+                                raise
+                            last_launch_error = error
+                        next_launch_at = time.monotonic() + 0.5
+            finally:
+                if acquired:
+                    lock_file.seek(0)
+                    try:
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        pass
+                lock_file.close()
+
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(0.1, remaining))
+
+        if last_launch_error is not None:
+            raise WorkerError(
+                "controller_start_failed",
+                f"Controller 启动失败：{last_launch_error}；请查看 {self.data_dir / 'logs' / 'controller.log'}",
+            ) from last_launch_error
         raise WorkerError(
             "controller_start_failed",
             f"Controller 未在 {startup_timeout} 秒内就绪；请查看 {self.data_dir / 'logs' / 'controller.log'}",
