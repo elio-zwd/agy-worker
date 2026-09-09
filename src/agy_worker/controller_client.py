@@ -10,8 +10,19 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from .common import WorkerError, atomic_json
 from .controller_protocol import CONTROLLER_LAUNCH_LOCK, CONTROLLER_STATE_FILE, PROTOCOL_VERSION
+from .controller_state import (
+    ControllerHealth,
+    ControllerState,
+    LegacyControllerState,
+    config_sha256,
+    controller_implementation_sha256,
+    implementation_version,
+    validate_controller_endpoint,
+)
 
 
 class ControllerClient:
@@ -21,6 +32,9 @@ class ControllerClient:
         self.data_dir = Path(config["data_dir"]).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.data_dir / CONTROLLER_STATE_FILE
+        self.current_config_sha256 = config_sha256(self.config_path)
+        self.current_implementation_version = implementation_version()
+        self.current_implementation_sha256 = controller_implementation_sha256()
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         if autostart:
             self.state = self._ensure(startup_timeout)
@@ -29,21 +43,58 @@ class ControllerClient:
             if not self._healthy(self.state):
                 raise WorkerError("controller_unavailable", "AGY Worker Controller 当前未运行")
 
+    @staticmethod
+    def _invalid_state(message="Controller 连接元数据无效"):
+        return WorkerError("controller_state_invalid", message)
+
     def _read_state(self):
         try:
             value = json.loads(self.state_path.read_text("utf-8"))
-            if Path(value["config_path"]).resolve() != self.config_path:
-                raise WorkerError("controller_conflict", "数据目录正由另一份配置使用")
-            return value
         except FileNotFoundError:
             return None
-        except (KeyError, ValueError, OSError) as error:
-            return None
+        except (ValueError, OSError) as error:
+            raise self._invalid_state() from error
+
+        try:
+            legacy = LegacyControllerState.model_validate(value)
+            validate_controller_endpoint(legacy.endpoint)
+        except (ValidationError, ValueError, TypeError) as error:
+            raise self._invalid_state("Controller 连接元数据无效；endpoint 必须是 http://127.0.0.1:<port>") from error
+
+        try:
+            state_config_path = Path(legacy.config_path).resolve()
+        except (OSError, TypeError, ValueError) as error:
+            raise self._invalid_state("Controller config_path 无效") from error
+        if state_config_path != self.config_path:
+            raise WorkerError("controller_conflict", "数据目录正由另一份配置使用")
+
+        # legacy state 只用于诊断协议不一致；普通 Bridge 不会把它当作可用业务实例。
+        if legacy.protocol_version != PROTOCOL_VERSION:
+            raise WorkerError("protocol_mismatch", "Controller 与 Bridge 协议版本不一致，请停止旧 Controller 后重试")
+
+        try:
+            state = ControllerState.model_validate(value).model_dump()
+        except ValidationError as error:
+            raise self._invalid_state("当前协议的 Controller state 缺失身份字段或包含未知字段") from error
+
+        if state["config_sha256"] != self.current_config_sha256:
+            raise WorkerError("controller_stale_config", "后台 Controller 仍使用旧配置；请显式停止旧 Controller 后重试")
+        if (
+            state["implementation_version"] != self.current_implementation_version
+            or state["implementation_sha256"] != self.current_implementation_sha256
+        ):
+            raise WorkerError("controller_stale_implementation", "后台 Controller 仍运行旧 Worker 实现；请显式停止旧 Controller 后重试")
+        return state
 
     def _request(self, state, path, payload=None, timeout=30):
+        try:
+            endpoint = validate_controller_endpoint(state["endpoint"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise self._invalid_state("Controller endpoint 必须是 http://127.0.0.1:<port>") from error
+
         body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
-            state["endpoint"] + path,
+            endpoint + path,
             data=body,
             method="GET" if payload is None else "POST",
             headers={"Authorization": "Bearer " + state["token"], "Content-Type": "application/json"},
@@ -59,11 +110,37 @@ class ControllerClient:
             return False
         try:
             result = self._request(state, "/control/health", timeout=0.8)
-        except WorkerError:
-            return False
-        if result.get("protocol_version") != PROTOCOL_VERSION:
+        except WorkerError as error:
+            if error.code == "controller_unavailable":
+                return False
+            raise
+
+        try:
+            health = ControllerHealth.model_validate(result)
+        except ValidationError as error:
+            raise self._invalid_state("Controller health 身份结构无效") from error
+
+        if health.protocol_version != PROTOCOL_VERSION:
             raise WorkerError("protocol_mismatch", "Controller 与 Bridge 协议版本不一致，请停止旧 Controller 后重试")
-        return result.get("status") == "ready"
+        if health.config_sha256 != self.current_config_sha256:
+            raise WorkerError("controller_stale_config", "后台 Controller 仍使用旧配置；请显式停止旧 Controller 后重试")
+        if (
+            health.implementation_version != self.current_implementation_version
+            or health.implementation_sha256 != self.current_implementation_sha256
+        ):
+            raise WorkerError("controller_stale_implementation", "后台 Controller 仍运行旧 Worker 实现；请显式停止旧 Controller 后重试")
+
+        identity_keys = (
+            "protocol_version",
+            "implementation_version",
+            "implementation_sha256",
+            "config_sha256",
+            "instance_id",
+            "pid",
+        )
+        if any(state[key] != getattr(health, key) for key in identity_keys):
+            raise self._invalid_state("Controller state 与 health 不是同一个实例")
+        return health.status == "ready"
 
     def _launch_windows(self, log_dir):
         """通过 WMI 服务创建进程，避免 Controller 被 stdio MCP 的 Job Object 回收。"""
