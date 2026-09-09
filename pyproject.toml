@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "elio-agy-worker"
-version = "0.2.0"
+version = "0.3.0"
 description = "Codex 经 MCP 调度本地 AGY 的任务执行器"
 requires-python = ">=3.13,<3.15"
 dependencies = ["mcp==2.2.0", "pydantic==2.13.5", "pywin32==312", "tomlkit==0.15.1"]

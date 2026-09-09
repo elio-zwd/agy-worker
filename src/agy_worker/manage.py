@@ -10,7 +10,9 @@ import tomllib
 from datetime import datetime
 from pathlib import Path
 import tomlkit
-from .common import atomic_json, digest
+from .common import WorkerError, atomic_json, digest
+from .controller_client import ControllerClient
+from .controller_protocol import PROTOCOL_VERSION
 from .models import (WorkerRequest,ContinueRequest,StatusRequest,CancelRequest,
                      ArtifactRequest,CapabilitiesRequest)
 
@@ -59,7 +61,8 @@ def doctor():
       'browser_program_exists':Path(config['browser']['args'][0]).is_file(),
       'enabled_kinds':config['enabled_kinds'],
       'permission_enforcement':'hook_and_broker','os_isolation':False,
-      'source_write_enabled':False,'arbitrary_shell_enabled':False}
+      'source_write_enabled':False,'arbitrary_shell_enabled':False,
+      'controller_protocol_version':PROTOCOL_VERSION}
     atomic_json(ROOT/'work/doctor.json',report)
     print(json.dumps(report,ensure_ascii=False,indent=2))
     if help_result.returncode or not all(report['required_flags'].values()) or not report['browser_program_exists']:
@@ -71,11 +74,22 @@ def schemas():
         atomic_json(ROOT/'schemas'/(name+'.json'),model.model_json_schema(by_alias=True))
 
 
+def stop():
+    try:
+        result=ControllerClient(ROOT/'config/runtime.toml',autostart=False).stop()
+        print(json.dumps(result,ensure_ascii=False))
+    except WorkerError as error:
+        if error.code=='controller_unavailable':
+            print('Controller 当前未运行')
+            return
+        raise
+
+
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('command',choices=['doctor','register','unregister','schemas'])
+    parser.add_argument('command',choices=['doctor','register','unregister','schemas','stop'])
     command=parser.parse_args().command
-    {'doctor':doctor,'register':register,'unregister':lambda:register(True),'schemas':schemas}[command]()
+    {'doctor':doctor,'register':register,'unregister':lambda:register(True),'schemas':schemas,'stop':stop}[command]()
 
 
 if __name__=='__main__':

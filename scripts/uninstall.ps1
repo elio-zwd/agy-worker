@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $workerRoot = Split-Path -Parent $PSScriptRoot
+& (Join-Path $workerRoot '.venv/Scripts/python.exe') -m agy_worker.manage stop
+if ($LASTEXITCODE -ne 0) { throw '停止 AGY Worker Controller 失败' }
 & (Join-Path $workerRoot '.venv/Scripts/python.exe') -m agy_worker.manage unregister
 if ($LASTEXITCODE -ne 0) { throw '移除 Codex 注册失败' }
 & agy.exe mcp remove agy-worker-broker

@@ -1,7 +1,6 @@
 """Codex 可见的任务级 MCP 工具与只读能力资源。"""
 import argparse
 import asyncio
-import base64
 import json
 from mcp import types
 from mcp.server import Server
@@ -10,7 +9,7 @@ from pydantic import ValidationError
 from .common import WorkerError
 from .models import (WorkerRequest, ContinueRequest, StatusRequest, CancelRequest,
                      ArtifactRequest, CapabilitiesRequest)
-from .runtime import Runtime
+from .controller_client import ControllerClient
 
 TOOLS = {
     "agy_capabilities": (CapabilitiesRequest, "先调用此只读工具发现参数范围、workspace_id、同仓库 worktree 和已登记命令。通常省略 limits 使用默认值。"),
@@ -42,7 +41,7 @@ def validation_body(error):
 
 
 async def serve(config):
-    runtime = Runtime(config)
+    client = await asyncio.to_thread(ControllerClient, config)
 
     async def list_tools(context, params):
         return types.ListToolsResult(tools=[types.Tool(name=name, description=description,
@@ -54,18 +53,20 @@ async def serve(config):
                 raise WorkerError("invalid_request", "未知工具")
             model = TOOLS[params.name][0].model_validate(params.arguments or {})
             if params.name == "agy_capabilities":
-                result = runtime.capabilities()
-            elif params.name in ("agy_worker", "agy_continue"):
-                result = runtime.submit(model)
+                result = await asyncio.to_thread(client.call, "capabilities")
+            elif params.name == "agy_worker":
+                result = await asyncio.to_thread(client.call, "submit", model.model_dump(mode="json", by_alias=True))
+            elif params.name == "agy_continue":
+                result = await asyncio.to_thread(client.call, "continue", model.model_dump(mode="json", by_alias=True))
             elif params.name == "agy_status":
-                result = await asyncio.to_thread(runtime.status, **model.model_dump())
+                result = await asyncio.to_thread(client.call, "status", model.model_dump(mode="json", by_alias=True), timeout=30)
             elif params.name == "agy_cancel":
-                result = runtime.cancel(**model.model_dump())
+                result = await asyncio.to_thread(client.call, "cancel", model.model_dump(mode="json", by_alias=True))
             else:
-                result = await asyncio.to_thread(runtime.read_artifact, **model.model_dump())
-                if isinstance(result, tuple):
-                    metadata, raw = result
-                    return types.CallToolResult(content=[types.ImageContent(type="image",data=base64.b64encode(raw).decode(),mimeType=metadata["media_type"])])
+                envelope = await asyncio.to_thread(client.call, "artifact_read", model.model_dump(mode="json", by_alias=True))
+                if envelope["content_type"] == "image":
+                    return types.CallToolResult(content=[types.ImageContent(type="image",data=envelope["data"],mimeType=envelope["metadata"]["media_type"])])
+                result = envelope["value"]
             return types.CallToolResult(content=[types.TextContent(type="text",text=json.dumps(result,ensure_ascii=False))], structuredContent=result)
         except (WorkerError, ValidationError, ValueError) as error:
             body=validation_body(error) if isinstance(error,ValidationError) else {
@@ -84,7 +85,7 @@ async def serve(config):
         return types.ListResourceTemplatesResult(resourceTemplates=[])
 
     async def read_resource(context, params):
-        uri=str(params.uri); capabilities=runtime.capabilities()
+        uri=str(params.uri); capabilities=await asyncio.to_thread(client.call, "capabilities")
         if uri=="agy://capabilities":
             value=capabilities
         elif uri=="agy://workspaces":
@@ -97,14 +98,11 @@ async def serve(config):
     instructions=("先调用 agy_capabilities 或读取 agy://workspaces，再提交任务。workspace_id 是登记别名，不是路径；"
                   "同仓库 Git worktree 使用 workspace_path。通常省略 limits 使用默认值。"
                   "AGY 只执行和采集证据；Codex 负责分析与源码修改。")
-    server=Server("elio-agy-worker",version="0.2.0",instructions=instructions,
+    server=Server("elio-agy-worker",version="0.3.0",instructions=instructions,
                   on_list_tools=list_tools,on_call_tool=call_tool,on_list_resources=list_resources,
                   on_list_resource_templates=list_resource_templates,on_read_resource=read_resource)
-    try:
-        async with stdio_server() as (reader,writer):
-            await server.run(reader,writer,server.create_initialization_options())
-    finally:
-        await asyncio.to_thread(runtime.close)
+    async with stdio_server() as (reader,writer):
+        await server.run(reader,writer,server.create_initialization_options())
 
 
 def main():

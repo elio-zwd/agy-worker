@@ -14,7 +14,8 @@ ROOT=Path(__file__).resolve().parents[1]
 async def run(args):
     request=json.loads(Path(args.request).read_text('utf-8-sig'))
     environment={key:value for key,value in os.environ.items() if key.lower().endswith('_proxy')}
-    options=StdioServerParameters(command=sys.executable,args=['-m','agy_worker.server','--config',str(ROOT/'config/runtime.toml')],env=environment)
+    config=Path(args.config).resolve() if args.config else ROOT/'config/runtime.toml'
+    options=StdioServerParameters(command=sys.executable,args=['-m','agy_worker.server','--config',str(config)],env=environment)
     async with stdio_client(options) as (reader,writer):
         async with ClientSession(reader,writer) as client:
             await client.initialize()
@@ -36,4 +37,5 @@ async def run(args):
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('request');parser.add_argument('--output')
+    parser.add_argument('--config',help='使用指定 Runtime 配置，默认使用正式配置')
     raise SystemExit(asyncio.run(run(parser.parse_args())))

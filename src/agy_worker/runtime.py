@@ -21,7 +21,9 @@ from .artifacts import Artifacts
 from .browser import Browser
 from .common import WorkerError, atomic_json, digest, now, redact, redact_value, safe_path
 from .logs import extract
-from .models import WorkerRequest, ContinueRequest
+from .models import (WorkerRequest, ContinueRequest, StatusRequest, CancelRequest,
+                     ArtifactRequest)
+from .controller_protocol import PROTOCOL_VERSION
 from .processes import run_process
 
 TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "interrupted"}
@@ -41,12 +43,14 @@ def origin(url):
 
 
 class Runtime:
-    def __init__(self, config_path):
+    def __init__(self, config_path, *, control_token=None, control_stop=None):
         self.config_path = Path(config_path).resolve()
         self.config = tomllib.loads(self.config_path.read_text("utf-8"))
         self.root = Path(self.config["data_dir"])
         self.root.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
+        self.control_token = control_token
+        self.control_stop = control_stop
         # 同一数据目录只允许一个控制端，避免并行实例重复恢复和重跑任务。
         import msvcrt
         self.lockfile = (self.root / "runtime.lock").open("a+b")
@@ -74,25 +78,7 @@ class Runtime:
             def log_message(self, *args):
                 pass
 
-            def do_POST(self):
-                try:
-                    length = int(self.headers.get("Content-Length", "0"))
-                    if length < 1 or length > 1048576:
-                        raise WorkerError("invalid_request", "请求大小无效")
-                    credential = self.headers.get("Authorization", "").removeprefix("Bearer ")
-                    with runtime.lock:
-                        task = runtime.tokens.get(credential)
-                    if not task or task["cancel"].is_set():
-                        raise WorkerError("permission_denied", "任务令牌无效或已撤销")
-                    payload = json.loads(self.rfile.read(length))
-                    if self.path == "/hook":
-                        result = runtime.hook(task, payload)
-                    elif self.path == "/action":
-                        result = runtime.action(task, payload)
-                    else:
-                        raise WorkerError("invalid_request", "未知入口")
-                except Exception as error:
-                    result = {"error": getattr(error, "code", "runtime_error"), "message": redact(str(error))[:1000]}
+            def send_json(self, result):
                 raw = json.dumps(result, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -102,10 +88,79 @@ class Runtime:
                     self.wfile.write(raw)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+
+            def control_authorized(self):
+                credential = self.headers.get("Authorization", "").removeprefix("Bearer ")
+                return bool(runtime.control_token) and secrets.compare_digest(credential, runtime.control_token)
+
+            def do_GET(self):
+                if self.path != "/control/health" or not self.control_authorized():
+                    self.send_json({"status": "denied"})
+                    return
+                self.send_json({"status": "ready", "protocol_version": PROTOCOL_VERSION, "pid": os.getpid()})
+
+            def do_POST(self):
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 1 or length > 1048576:
+                        raise WorkerError("invalid_request", "请求大小无效")
+                    payload = json.loads(self.rfile.read(length))
+                    if self.path.startswith("/control/"):
+                        if not self.control_authorized():
+                            raise WorkerError("permission_denied", "Controller 凭据无效")
+                        if payload.get("protocol_version") != PROTOCOL_VERSION:
+                            raise WorkerError("protocol_mismatch", "Controller 与 Bridge 协议版本不一致")
+                        if self.path == "/control/call":
+                            result = {"ok": True, "result": runtime.control_call(payload.get("method"), payload.get("params", {}))}
+                        elif self.path == "/control/stop" and runtime.control_stop:
+                            runtime.control_stop()
+                            result = {"ok": True, "status": "stopping"}
+                        else:
+                            raise WorkerError("invalid_request", "未知控制入口")
+                    else:
+                        credential = self.headers.get("Authorization", "").removeprefix("Bearer ")
+                        with runtime.lock:
+                            task = runtime.tokens.get(credential)
+                        if not task or task["cancel"].is_set():
+                            raise WorkerError("permission_denied", "任务令牌无效或已撤销")
+                        if self.path == "/hook":
+                            result = runtime.hook(task, payload)
+                        elif self.path == "/action":
+                            result = runtime.action(task, payload)
+                        else:
+                            raise WorkerError("invalid_request", "未知入口")
+                except Exception as error:
+                    body = {"code": getattr(error, "code", "runtime_error"), "message": redact(str(error))[:1000]}
+                    result = {"ok": False, "error": body} if self.path.startswith("/control/") else {"error": body["code"], "message": body["message"]}
+                self.send_json(result)
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.http.daemon_threads = True
         self.endpoint = f"http://127.0.0.1:{self.http.server_port}"
         threading.Thread(target=self.http.serve_forever, daemon=True).start()
+
+    def control_call(self, method, params):
+        """Controller IPC 只暴露任务级方法，低层浏览器动作仍只对私有 Broker 开放。"""
+        if method == "capabilities":
+            return self.capabilities()
+        if method == "submit":
+            return self.submit(WorkerRequest.model_validate(params))
+        if method == "continue":
+            return self.submit(ContinueRequest.model_validate(params))
+        if method == "status":
+            request = StatusRequest.model_validate(params)
+            return self.status(**request.model_dump())
+        if method == "cancel":
+            request = CancelRequest.model_validate(params)
+            return self.cancel(**request.model_dump())
+        if method == "artifact_read":
+            request = ArtifactRequest.model_validate(params)
+            result = self.read_artifact(**request.model_dump())
+            if isinstance(result, tuple):
+                metadata, raw = result
+                return {"content_type": "image", "metadata": metadata,
+                        "data": base64.b64encode(raw).decode("ascii")}
+            return {"content_type": "json", "value": result}
+        raise WorkerError("invalid_request", "未知 Controller 方法")
 
     def _save(self, record):
         with self.lock:
@@ -181,6 +236,7 @@ class Runtime:
                     item["known_worktrees"]=[str(source)]
             workspaces.append(item)
         return {"schema_version":1,"enabled_kinds":self.config["enabled_kinds"],
+                "controller":{"protocol_version":PROTOCOL_VERSION,"single_runtime":True,"max_concurrent_tasks":1},
                 "limits":{"total_timeout_sec":{"default":300,"min":10,"max":1800},
                           "summary_max_bytes":{"default":16384,"min":2048,"max":16384},
                           "artifact_max_bytes":{"default":536870912,"min":1048576,"max":536870912}},
