@@ -111,11 +111,12 @@ class Runtime:
                     if self.path.startswith("/control/"):
                         if not self.control_authorized():
                             raise WorkerError("permission_denied", "Controller 凭据无效")
-                        if payload.get("protocol_version") != PROTOCOL_VERSION:
-                            raise WorkerError("protocol_mismatch", "Controller 与 Bridge 协议版本不一致")
                         if self.path == "/control/call":
+                            if payload.get("protocol_version") != PROTOCOL_VERSION:
+                                raise WorkerError("protocol_mismatch", "Controller 与 Bridge 协议版本不一致")
                             result = {"ok": True, "result": runtime.control_call(payload.get("method"), payload.get("params", {}))}
                         elif self.path == "/control/stop" and runtime.control_stop:
+                            # 显式停止属于管理操作；Bearer 鉴权成功即可停止旧实例。
                             runtime.control_stop()
                             result = {"ok": True, "status": "stopping"}
                         else:
