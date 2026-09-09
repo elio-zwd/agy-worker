@@ -169,7 +169,7 @@ def test_controller_identity_is_frozen_and_published(tmp_path):
         service.close()
 
 
-def test_config_change_rejects_running_controller(tmp_path):
+def test_stale_config_rejects_running_controller(tmp_path):
     """破坏点：后台 Runtime 已读取旧配置时，新 Bridge 不能继续把它当作当前配置实例。"""
     config = make_config(tmp_path)
     service = ControllerService(config)
@@ -185,7 +185,7 @@ def test_config_change_rejects_running_controller(tmp_path):
         service.close()
 
 
-def test_implementation_change_rejects_running_controller(tmp_path, monkeypatch):
+def test_stale_implementation_rejects_running_controller(tmp_path, monkeypatch):
     """破坏点：代码已经更新但旧 Controller 仍存活时，新 Bridge 必须 fail-closed。"""
     config = make_config(tmp_path)
     service = ControllerService(config)
