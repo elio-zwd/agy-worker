@@ -240,5 +240,5 @@ def test_doctor_reports_acl_unknown_without_claiming_isolation(tmp_path, monkeyp
     manage_module.doctor()
     report = json.loads((root / "work" / "doctor.json").read_text("utf-8"))
 
-    assert report["data_dir_acl"] == unknown
+    assert report["controller_data_acl"] == unknown
     assert report["os_isolation"] is False
