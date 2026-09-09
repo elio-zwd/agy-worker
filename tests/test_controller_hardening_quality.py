@@ -1,10 +1,9 @@
 """最终代码质量审查发现的 Controller 生命周期回归用例。"""
 import importlib.util
-import sys
+import os
+import time
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 import agy_worker.controller_client as controller_client_module
 from agy_worker.common import WorkerError
@@ -87,3 +86,23 @@ def test_windows_launch_retries_use_distinct_environment_files(tmp_path, monkeyp
     assert "controller-environment-" in commands[1]
     assert "controller-environment.json" not in commands[0]
     assert "controller-environment.json" not in commands[1]
+
+
+def test_stale_controller_environment_files_are_cleaned_without_touching_fresh_files(tmp_path):
+    _config, data_dir = make_config(tmp_path)
+    stale = data_dir / "controller-environment-stale.json"
+    fresh = data_dir / "controller-environment-fresh.json"
+    legacy = data_dir / "controller-environment.json"
+    for path in (stale, fresh, legacy):
+        path.write_text("{}", encoding="utf-8")
+    old = time.time() - 600
+    os.utime(stale, (old, old))
+    os.utime(legacy, (old, old))
+
+    client = object.__new__(ControllerClient)
+    client.data_dir = data_dir
+    client._cleanup_stale_environment_files(older_than=300)
+
+    assert not stale.exists()
+    assert not legacy.exists()
+    assert fresh.exists()
