@@ -14,7 +14,6 @@ CONTROLLER_IMPLEMENTATION_FILES = (
     "common.py",
     "controller.py",
     "controller_protocol.py",
-    "controller_state.py",
     "logs.py",
     "models.py",
     "processes.py",
