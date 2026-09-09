@@ -1,52 +1,33 @@
-# Controller v0.3.1 本地 AI 严格验收协议
+# Controller v0.3.1 最终本地 AI 严格验收协议
 
 > 适用分支：`fix/controller-hardening-v031`  
 > 规格：`SPEC.md`  
 > 实施计划：`PLAN.md`  
 > 状态追踪：`TASKS.md`
 
-## 1. 本地 AI 的角色
+## 1. 验收方式
 
-本地 AI 是独立验收层，不是本分支的主开发者。
+本分支按用户要求采用**远端连续开发 + 最终一次性本地验收**：T2–T9 不再逐 Task 打断用户执行 RED/GREEN；ChatGPT 完成代码、测试、静态规格复核和代码质量复核后，再由本地 AI 在最终 HEAD 上一次性运行全部 Windows 验证。
 
-职责：
+本地 AI 是独立验收层，不是主开发者。只允许：
 
 - 拉取远端分支；
-- 在 Windows 10 / 当前项目真实 Python 环境执行测试；
-- 验证 WMI、Job Object、stdio Bridge、Controller 生命周期；
-- 检查本机进程 / state / 日志证据；
-- 报告失败的具体命令、stdout/stderr、文件和行号；
-- 保持源码只读，除非用户明确要求本地 AI 临时做独立实验；
-- 不直接替 ChatGPT 修生产代码；发现问题后交回 ChatGPT 按 receiving-code-review 复核。
+- 读取代码、diff、日志和 state；
+- 在 Windows 10 / 项目真实 Python 环境运行测试与验收脚本；
+- 验证 WMI、stdio Bridge、Controller 生命周期、ACL advisory；
+- 返回命令、退出码、pytest 摘要、PID/instance、原始错误。
 
-不得把“代码看起来正确”写成“测试通过”。
+**不得修复生产代码、不得改测试制造通过、不得 reset/clean 用户工作。** 发现问题后把证据交回 ChatGPT，按 `receiving-code-review` 技术复核。
 
-## 2. 安全约束
+## 2. 安全边界
 
-### 2.1 默认不动正式 Controller
-
-验收优先使用：
+验收优先使用独立目录：
 
 ```text
-pytest 的 tmp_path / temp data_dir
 work/controller-v031-acceptance/
 ```
 
-不要为了验收自动执行正式：
-
-```powershell
-scripts/stop.ps1
-scripts/register.ps1
-scripts/install.ps1
-```
-
-因为 stop 可能取消用户当前任务，register/install 会改变本机接入状态。
-
-只有用户明确确认当前没有重要任务、且确实要验收正式配置时，才操作正式 `config/runtime.toml` Controller。
-
-### 2.2 不删除历史证据
-
-不要删除：
+不要自动停止正式 `config/runtime.toml` Controller，不要执行 `register.ps1` / `install.ps1`，不要删除历史：
 
 ```text
 data/tasks/
@@ -54,156 +35,113 @@ data/sessions/
 work/backups/
 ```
 
-本验收只允许清理自己创建的：
+只可清理本次自己创建的 acceptance 目录，并且先确认其中 Controller 已停止。
 
-```text
-work/controller-v031-acceptance/
-```
-
-并且清理前先确认该目录的 Controller 已停止。
-
-### 2.3 验收前保留用户工作
-
-第一步必须执行：
-
-```powershell
-git status --short
-git branch --show-current
-git rev-parse HEAD
-```
-
-若存在用户未提交修改：
-
-- 不 reset；
-- 不 clean；
-- 不 checkout 覆盖；
-- 记录后停止可能覆盖这些文件的操作；
-- 向用户报告。
-
-## 3. 每个 TDD Task 的 RED 验收格式
-
-ChatGPT 提交“仅测试 / 测试先行”阶段后，本地 AI 执行 PLAN 指定的定向命令。
-
-报告必须使用：
-
-```markdown
-## RED Verification — T<编号>
-
-Branch: fix/controller-hardening-v031
-Commit: <实际 HEAD SHA>
-Command:
-```powershell
-<完整命令>
-```
-
-Exit code: <数字>
-Result: EXPECTED_FAIL | WRONG_FAILURE | UNEXPECTED_PASS | INFRA_FAILURE
-
-Expected break:
-- <这个测试本来要捕获的生产缺陷>
-
-Observed failure:
-- Test: <测试名>
-- Exception/assertion: <原文>
-- File/line: <如有>
-
-Unrelated failures:
-- none
-# 或逐条列出
-
-Git status after run:
-```text
-<git status --short 原文>
-```
-```
-
-判断：
-
-- `EXPECTED_FAIL`：失败原因就是计划中的缺失行为，ChatGPT 才能进入生产实现；
-- `WRONG_FAILURE`：测试自己写错 / fixture 错 / 环境错误，不能进入 GREEN；
-- `UNEXPECTED_PASS`：测试没有证明缺陷，不能进入 GREEN；
-- `INFRA_FAILURE`：Python/依赖/路径等基础环境失败，先修验收环境或报告阻断。
-
-## 4. 每个 TDD Task 的 GREEN 验收格式
-
-ChatGPT 完成最小实现后，本地 AI 执行定向测试，并在必要时执行邻近回归。
-
-```markdown
-## GREEN Verification — T<编号>
-
-Branch: fix/controller-hardening-v031
-Commit: <实际 HEAD SHA>
-Commands:
-```powershell
-<命令1>
-<命令2>
-```
-
-Exit codes:
-- command 1: 0
-- command 2: 0
-
-Results:
-- <测试文件>: <passed 数 / failed 数，以真实输出为准>
-
-Warnings / stderr:
-- none
-# 或贴原文
-
-Git status after run:
-```text
-<原文>
-```
-
-Verdict: PASS | FAIL
-```
-
-不能只发“通过了”。必须提供实际 commit + command + exit code + 测试摘要。
-
-## 5. 最终集成验收准备
-
-在 T1–T8 完成并由 ChatGPT 标记 `awaiting_acceptance` 后执行。
+## 3. 拉取最终 HEAD
 
 ```powershell
 Set-Location 'D:\My\_Elio\agy-worker'
 git fetch origin
 git switch fix/controller-hardening-v031
 git pull --ff-only origin fix/controller-hardening-v031
-git status --short
+
+git branch --show-current
 git rev-parse HEAD
+git status --short
 ```
 
-如果本机仓库路径不同，使用实际路径；不要为了匹配文档移动仓库。
+如果本机路径不同，使用实际路径。若 `git status --short` 有任何用户未提交修改：不要覆盖；记录并停止可能改 tracked 文件的动作。
 
-记录：
+随后刷新 editable package metadata，避免源码版本已更新但本机 `.dist-info` 仍旧：
 
-```text
-HEAD=<sha>
-status=<git status --short>
+```powershell
+& ./.venv/Scripts/python.exe -m pip install --no-deps --no-build-isolation -e .
+& ./.venv/Scripts/python.exe -c "import importlib.metadata as m; print(m.version('elio-agy-worker'))"
 ```
 
-## 6. 权威全量检查
+期望 metadata：`0.3.1`。若 editable install 失败，停止后续并原样报告。
 
-执行仓库 `AGENTS.md` 指定的权威入口：
+## 4. T2–T8 定向验收
+
+逐条运行，保留每条 exit code 与 pytest summary；任何一条失败都继续记录后续**只读/测试性**证据，但不得修代码。
+
+### T2：跨协议 stop / replacement 防误停
+
+```powershell
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller.py -k "stop or protocol"
+```
+
+重点：旧协议 management stop；v2 stop auth-only；business call 仍 protocol strict；replacement 不被继续请求；`manage stop --config`。
+
+### T3：launch lock takeover / retry / WMI PID
+
+```powershell
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller.py -k "simultaneous or takeover or launch_retry or wmi_launch"
+```
+
+重点：等待者能接管；重试间隔不形成 process storm；两个 client 仍只落到一个 healthy Controller；PID 只是诊断，health 才是 ready 真值。
+
+### T4：custom run-task ownership
+
+```powershell
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_run_task.py
+```
+
+重点：本次自启实例默认清理；pre-existing 保留；`--keep-controller` 保留；replacement 防误停。
+
+### T5：status reconnect budget
+
+```powershell
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller_reconnect.py
+```
+
+重点：第一次 long-poll 断线后，第二次 `wait_ms=0`；task/revision 保留；submit/continue request_id 不变。
+
+### T6：inflight backpressure / queued cancel
+
+```powershell
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_runtime.py
+```
+
+重点：1 concurrent / 16 inflight；第 17 个新请求 `worker_busy`；幂等 retry 不受容量 gate；reject 不创建第 17 个 task/session；真正 queued Future 立即 `cancelled`。
+
+### T7：state security / ACL advisory
+
+```powershell
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller_security.py
+```
+
+重点：非法 endpoint 在任何网络访问前拒绝；ACL classifier；ACL API 失败是 unknown，不宣称安全。
+
+### T8：MCP version / package contract
+
+```powershell
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_server.py
+```
+
+重点：MCP server version 使用 package metadata，必须为 `0.3.1`。
+
+## 5. 权威全量检查
+
+仓库 `AGENTS.md` 的权威入口：
 
 ```powershell
 pwsh.exe -NoProfile -File scripts/check.ps1
 ```
 
-记录完整：
+记录：
 
 - exit code；
-- pytest collected/passed/failed 数；
-- warning/error；
-- 是否有 hang / timeout。
+- compileall 是否成功；
+- pytest collected / passed / failed / skipped；
+- warning / error；
+- 是否 hang / timeout。
 
-**通过条件：** exit code 0，pytest 0 failed。
+只有 exit code 0 且 pytest 0 failed 才可记为全量 PASS。不要预填测试数量。
 
-不要在报告中预设测试数量；以当前分支实际输出为准。
+## 6. 建立隔离 lifecycle config
 
-## 7. 建立隔离 lifecycle acceptance config
-
-下面步骤只写 `work/`，不修改 tracked config。
+只写 `work/`：
 
 ```powershell
 $Root = (Get-Location).Path
@@ -235,172 +173,177 @@ Set-Content -LiteralPath $Config -Value $ConfigText -Encoding utf8
 Get-Content -LiteralPath $Config
 ```
 
-验收配置故意不登记 AGY/browser，因为此 lifecycle 测试只验证 Bridge/Controller/Runtime 启动与工具发现，不执行 AGY 任务。
+该配置不登记 AGY/browser；lifecycle 验收只初始化 Bridge/Controller/Runtime 与 capabilities，不执行 AGY。
 
-## 8. Fresh 双 Bridge / WMI 生命周期验收
+## 7. T9 fresh 双 Bridge / WMI 生命周期
 
-先确认脚本支持计划中的参数：
+先查看 CLI：
 
 ```powershell
 & ./.venv/Scripts/python.exe scripts/verify-controller.py --help
 ```
 
-然后：
+再执行：
 
 ```powershell
 & ./.venv/Scripts/python.exe scripts/verify-controller.py `
   --config $Config `
   --fresh `
   --stop-after
+$VerifyExit = $LASTEXITCODE
+"verify-controller exit=$VerifyExit"
 ```
 
-记录完整 JSON。
+完整保存 JSON。通过条件全部为真：
 
-**必须检查：**
+```text
+first_server_version == "0.3.1"
+second_server_version == "0.3.1"
+tool_count == 6
+second_tool_count == 6
+controller_protocol == 2
+controller_instance_id 非空
+controller_pid > 0
+controller_alive_after_bridges == true
+max_concurrent_tasks == 1
+max_inflight_tasks == 16
+stopped_after_verification == true
+verification_passed == true
+exit code == 0
+```
 
-- `first_server_version == "0.3.1"`；
-- `second_server_version == "0.3.1"`；
-- `tool_count == 6`；
-- `controller_protocol == 2`；
-- `controller_instance_id` 非空；
-- `controller_pid > 0`；
-- `controller_alive_after_bridges == true`；
-- `max_concurrent_tasks == 1`；
-- `max_inflight_tasks == 16`；
-- `stopped_after_verification == true`。
+`--fresh` 如果在停止目标时发现 replacement，脚本应 fail-closed，不应继续追停 replacement。
 
-随后检查：
+结束后：
 
 ```powershell
 $State = Join-Path $DataDir 'controller.json'
 Test-Path -LiteralPath $State
 ```
 
-Expected:
+期望 `False`。
 
-```text
-False
-```
+## 8. 真实 custom-config lifecycle（不调用 AGY）
 
-这证明 acceptance Controller 已停止，不代表正式 Controller 状态。
-
-## 9. Custom `run-task --config` no-leak 验收
-
-### 9.1 测试前确认没有 acceptance Controller
+这部分使用一个**必然在 Runtime 前置校验阶段失败**的请求，因此可以验证 Controller ownership/cleanup，而不依赖 AGY 登录状态。
 
 ```powershell
-Test-Path -LiteralPath (Join-Path $DataDir 'controller.json')
-```
-
-Expected: `False`。
-
-### 9.2 构造只执行本地 Python compile 的请求
-
-```powershell
-$Request = Join-Path $AcceptanceRoot 'request.json'
+$InvalidRequest = Join-Path $AcceptanceRoot 'invalid-workspace-request.json'
 @"
 {
-  "request_id": "req-$(New-Guid | ForEach-Object { $_.Guid.Replace('-', '') })",
-  "workspace_id": "demo",
+  "request_id": "req-$((New-Guid).Guid.Replace('-', ''))",
+  "workspace_id": "missing-workspace",
   "kind": "build",
-  "objective": "执行已登记的 demo_compile，只返回执行结果，不修改源码。",
-  "permissions": {"build": true, "log": true},
+  "objective": "只验证 custom Controller 生命周期；此请求应在工作区校验处被拒绝。",
+  "permissions": {"build": true},
   "inputs": {"command_id": "demo_compile"}
 }
-"@ | Set-Content -LiteralPath $Request -Encoding utf8
+"@ | Set-Content -LiteralPath $InvalidRequest -Encoding utf8
 ```
 
-注意：该任务正常 Runtime 仍会启动 AGY CLI 来驱动 execute。如果本机 AGY 账号不可用，这一步可能因 AGY 认证失败；**no-leak 的判断仍必须看 finally 是否清理 Controller**，不能把 AGY auth failure 与 Controller cleanup 混为一个结论。
+### 8.1 本次自启 → 默认 no-leak
 
-执行：
+先确认：
 
 ```powershell
-& ./.venv/Scripts/python.exe scripts/run-task.py $Request --config $Config
-$RunTaskExit = $LASTEXITCODE
-$StateExists = Test-Path -LiteralPath (Join-Path $DataDir 'controller.json')
-"run-task exit=$RunTaskExit"
-"controller state exists=$StateExists"
+Test-Path -LiteralPath $State
 ```
 
-**Controller lifecycle 通过条件：** 无论任务业务成功或失败，若该 Controller 是本次 run-task 启动且未给 `--keep-controller`，最终 `controller state exists=False`。
+期望 `False`。
 
-业务任务是否成功必须单独报告。
-
-### 9.3 `--keep-controller`
-
-使用新的 request_id：
+执行（业务 exit 非 0 是预期，因为 workspace 故意不存在）：
 
 ```powershell
-& ./.venv/Scripts/python.exe scripts/run-task.py $Request --config $Config --keep-controller
+& ./.venv/Scripts/python.exe scripts/run-task.py $InvalidRequest --config $Config
+$NormalExit = $LASTEXITCODE
+$NormalStateExists = Test-Path -LiteralPath $State
+"normal exit=$NormalExit"
+"normal state exists=$NormalStateExists"
 ```
 
-如果该次脚本拥有新启动 Controller，则结束后 state 应存在。随后显式清理：
+lifecycle 通过条件：`normal state exists=False`。
+
+### 8.2 pre-existing Controller 必须保留
+
+先显式启动 acceptance Controller并记录身份：
+
+```powershell
+& ./.venv/Scripts/python.exe -c "from agy_worker.controller_client import ControllerClient; import sys; c=ControllerClient(sys.argv[1]); print(c.state['instance_id']); print(c.state['pid'])" $Config
+$Before = Get-Content -LiteralPath $State -Raw | ConvertFrom-Json
+"before instance=$($Before.instance_id) pid=$($Before.pid)"
+```
+
+为这次逻辑请求生成新的 request_id：
+
+```powershell
+(Get-Content -LiteralPath $InvalidRequest -Raw) `
+  -replace 'req-[0-9a-f]+', ('req-' + (New-Guid).Guid.Replace('-', '')) `
+  | Set-Content -LiteralPath $InvalidRequest -Encoding utf8
+
+& ./.venv/Scripts/python.exe scripts/run-task.py $InvalidRequest --config $Config
+$PreExistingExit = $LASTEXITCODE
+$After = Get-Content -LiteralPath $State -Raw | ConvertFrom-Json
+"after instance=$($After.instance_id) pid=$($After.pid)"
+```
+
+通过条件：state 仍存在，且 `$After.instance_id == $Before.instance_id`。
+
+然后清理：
 
 ```powershell
 pwsh.exe -NoProfile -File scripts/stop.ps1 -Config $Config
-Test-Path -LiteralPath (Join-Path $DataDir 'controller.json')
+Test-Path -LiteralPath $State
 ```
 
-Expected 最终 `False`。
+期望 `False`。
 
-如果业务请求的固定 request_id 已被第一次保存，先生成新的 request 文件；不要复用不同 payload 的同一 request_id。
+### 8.3 `--keep-controller`
 
-## 10. Endpoint tamper / fail-closed 本地验证
-
-自动测试通过后，可做一个隔离 state 篡改探针，但不要连接外部地址。
-
-推荐只运行 pytest 中的 endpoint 测试：
+再生成新的 request_id，并在无 pre-existing Controller 时：
 
 ```powershell
-& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller_security.py -k endpoint
+(Get-Content -LiteralPath $InvalidRequest -Raw) `
+  -replace 'req-[0-9a-f]+', ('req-' + (New-Guid).Guid.Replace('-', '')) `
+  | Set-Content -LiteralPath $InvalidRequest -Encoding utf8
+
+& ./.venv/Scripts/python.exe scripts/run-task.py $InvalidRequest --config $Config --keep-controller
+$KeepExit = $LASTEXITCODE
+$KeepStateExists = Test-Path -LiteralPath $State
+"keep exit=$KeepExit"
+"keep state exists=$KeepStateExists"
 ```
 
-通过条件：非法 endpoint 在网络请求前被本地验证拒绝。
+lifecycle 通过条件：`keep state exists=True`。业务请求失败仍是预期，不要把它误判为 lifecycle 失败。
 
-不要通过真的启动外部 HTTP server 来“证明不会外联”。
+最终显式清理：
 
-## 11. ACL advisory 验收
+```powershell
+pwsh.exe -NoProfile -File scripts/stop.ps1 -Config $Config
+Test-Path -LiteralPath $State
+```
 
-执行：
+期望 `False`。
+
+## 9. ACL advisory 真实诊断
+
+运行正式 doctor 只做诊断，不自动更改 ACL：
 
 ```powershell
 pwsh.exe -NoProfile -File scripts/doctor.ps1
+$DoctorExit = $LASTEXITCODE
 Get-Content -LiteralPath work/doctor.json
 ```
 
-报告 `controller_data_acl` 原文。
+报告字段名是 **`data_dir_acl`**：
 
-判断规则：
-
-- `checked=true`：记录 `broad_read_principals` 和 advisory；
+- `checked=true`：记录 `broad_read_principals` 与 `token_confidentiality_advisory`；
 - `checked=false`：记录 error，结论只能是“ACL 安全状态未确认”；
-- 即使 advisory 良好，也不能报告 `os_isolation=true` 或“安全沙箱已启用”。
+- 无论结果如何，`os_isolation` 仍应为 `false`；
+- advisory 良好也不能写“安全沙箱已启用”。
 
-## 12. Protocol stop 验收
+`doctor` 的整体 exit code仍由既有 AGY/browser 必需条件决定；如果 doctor 因其他必需依赖失败，要区分 ACL 结果与整体 doctor 结果。
 
-自动测试负责模拟 v1/v2 compatibility。最终本机不要求安装真的旧 v0.3 Controller。
-
-运行：
-
-```powershell
-& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller.py -k "protocol and stop"
-```
-
-通过条件：普通 business client 对协议不匹配 fail-closed；management stop 仍可停止旧协议 fixture/server。
-
-## 13. Backpressure / queued cancel 验收
-
-```powershell
-& ./.venv/Scripts/python.exe -m pytest -q tests/test_runtime.py -k "worker_busy or inflight or queued_cancel"
-```
-
-重点看：
-
-- 第 17 个新请求被拒；
-- 幂等 retry 不被拒；
-- queued cancel 不需要释放前一个 running slot。
-
-## 14. 最终 Git 完整性检查
+## 10. Git 完整性
 
 ```powershell
 git status --short
@@ -409,21 +352,19 @@ git diff --stat origin/main...HEAD
 git log --oneline --decorate origin/main..HEAD
 ```
 
-报告：
+要求：
 
-- tracked 工作区是否干净；
-- diff-check 是否有 whitespace error；
-- changed files 是否全部属于计划范围；
-- commit 顺序。
+- tracked 工作区干净；
+- `git diff --check` exit 0；
+- 不因 `work/controller-v031-acceptance/` 未跟踪/忽略文件误报 tracked 修改；
+- 若任何 tracked 文件被验收过程修改，停止并报告。
 
-不要因为 `work/controller-v031-acceptance/` 存在就误报 tracked dirty；但如果任何受版本控制文件被验收修改，必须列出并停止。
+## 11. 最终报告模板
 
-## 15. 最终本地 AI 报告模板
-
-请把以下完整报告发回 ChatGPT：
+把下面一次性完整报告交回 ChatGPT。不要只写“全通过”。
 
 ```markdown
-# AGY Worker v0.3.1 Local Acceptance Report
+# AGY Worker v0.3.1 Final Local Acceptance
 
 ## Environment
 - OS:
@@ -432,59 +373,86 @@ git log --oneline --decorate origin/main..HEAD
 - Branch: fix/controller-hardening-v031
 - HEAD:
 - Starting git status:
+- Package metadata version:
 
-## 1. Full repository check
-Command:
-```powershell
-pwsh.exe -NoProfile -File scripts/check.ps1
-```
-Exit code:
-Pytest summary:
-Warnings/errors:
+## T2 stop/protocol
+- Command:
+- Exit code:
+- Summary:
 
-## 2. Fresh two-Bridge lifecycle
-Config:
-Command:
-```powershell
-...
-```
-Raw JSON:
+## T3 launch takeover/WMI
+- Command:
+- Exit code:
+- Summary:
+
+## T4 run-task unit tests
+- Command:
+- Exit code:
+- Summary:
+
+## T5 reconnect
+- Command:
+- Exit code:
+- Summary:
+
+## T6 runtime/backpressure
+- Command:
+- Exit code:
+- Summary:
+
+## T7 security/ACL tests
+- Command:
+- Exit code:
+- Summary:
+
+## T8 server/version
+- Command:
+- Exit code:
+- Summary:
+
+## Full repository check
+- Command: pwsh.exe -NoProfile -File scripts/check.ps1
+- Exit code:
+- Compileall:
+- Pytest collected/passed/failed/skipped:
+- Warnings/errors:
+
+## T9 fresh two-Bridge lifecycle
+- Command:
+- Exit code:
+- Raw JSON:
 ```json
 ...
 ```
-State exists after --stop-after:
+- State exists after --stop-after:
 
-## 3. Custom run-task ownership
-Normal custom run exit code:
-Business task status:
-Controller state after normal run:
-Keep-controller state after run:
-Explicit custom stop result:
-Final state exists:
+## Custom-config lifecycle
+- Normal invalid-request exit:
+- State after normal run:
+- Pre-existing instance before:
+- Pre-existing instance after:
+- Keep-controller state after run:
+- Final explicit stop result:
+- Final state exists:
 
-## 4. Protocol stop tests
-Command:
-Exit code:
-Summary:
-
-## 5. Backpressure / queued cancel
-Command:
-Exit code:
-Summary:
-
-## 6. ACL advisory
-Doctor exit code:
-controller_data_acl:
+## ACL advisory
+- doctor exit code:
+- data_dir_acl:
 ```json
 ...
 ```
+- os_isolation:
 
-## 7. Git integrity
-`git status --short`:
+## Git integrity
+- git status --short:
 ```text
 ...
 ```
-`git diff --check origin/main...HEAD` exit/output:
+- git diff --check exit/output:
+```text
+...
+```
+- diff stat:
 ```text
 ...
 ```
@@ -492,25 +460,18 @@ controller_data_acl:
 ## Findings
 ### Blocking
 - none
-# 或逐条：测试名 / 命令 / 原始错误 / 复现条件
+# 或逐条列出：命令、测试名、原始错误、文件/行号
 
 ### Non-blocking
 - none
 
-## Verdict
-PASS | FAIL | PARTIAL
-
-## Unverified
-- <明确列出没有实际执行的项目>
+## Final local verdict
+PASS | FAIL | INFRA_BLOCKED
 ```
 
-## 16. 反馈给 ChatGPT 后的处理
+## 12. 判定规则
 
-ChatGPT 收到本报告后必须：
-
-1. 对每个 finding 回到当前 GitHub 代码核实；
-2. 区分真实缺陷、环境问题、测试问题、建议性改进；
-3. 真实缺陷先补能复现的失败测试；
-4. 不未经判断照搬本地 AI 建议；
-5. 修复后要求最小必要的定向复验；
-6. 最终只基于新鲜证据更新 `TASKS.md` / `docs/部署验收.md`。
+- 任一代码/测试行为失败：`FAIL`；不修，交回 ChatGPT。
+- editable install、Python、PowerShell 等基础设施阻断且无法执行测试：`INFRA_BLOCKED`。
+- 只有所有 required checks 有真实证据、全量测试 0 failed、fresh lifecycle exit 0、custom lifecycle 符合 ownership 合同、git diff-check 0，才能写 `PASS`。
+- 本地 AI 的 PASS 仍是验收证据；ChatGPT 收到后会按 `receiving-code-review` 逐条技术核对，再决定是否创建 Draft PR。
