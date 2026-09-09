@@ -392,15 +392,21 @@ class ControllerClient:
         )
 
     def call(self, method, params=None, *, timeout=30):
-        payload = {"protocol_version": PROTOCOL_VERSION, "method": method, "params": params or {}}
+        request_params = params or {}
+        payload = {"protocol_version": PROTOCOL_VERSION, "method": method, "params": request_params}
         try:
             response = self._request(self.state, "/control/call", payload, timeout=timeout)
         except WorkerError as error:
             if error.code != "controller_unavailable":
                 raise
-            # 所有任务级调用都具备幂等标识或只读/幂等语义，可以在重连后安全重试一次。
+            # 第一次 status 可能已经消耗完整 long-poll 预算；重连后第二次只取当前快照。
             self.state = self._ensure(15)
-            response = self._request(self.state, "/control/call", payload, timeout=timeout)
+            retry_params = request_params
+            if method == "status":
+                retry_params = dict(request_params)
+                retry_params["wait_ms"] = 0
+            retry_payload = {"protocol_version": PROTOCOL_VERSION, "method": method, "params": retry_params}
+            response = self._request(self.state, "/control/call", retry_payload, timeout=timeout)
         if not response.get("ok"):
             error = response.get("error", {})
             raise WorkerError(error.get("code", "runtime_error"), error.get("message", "Controller 调用失败"))
