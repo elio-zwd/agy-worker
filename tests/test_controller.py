@@ -6,9 +6,12 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+import agy_worker.controller_client as controller_client_module
+from agy_worker.common import WorkerError
 from agy_worker.controller import ControllerService
 from agy_worker.controller_client import ControllerClient
 
@@ -27,6 +30,14 @@ def make_config(tmp_path):
         encoding="utf-8",
     )
     return config
+
+
+def rewrite_config_with_changed_enabled_kinds(config):
+    text = config.read_text(encoding="utf-8")
+    config.write_text(
+        text.replace("enabled_kinds = ['build']", "enabled_kinds = ['build', 'test']"),
+        encoding="utf-8",
+    )
 
 
 @asynccontextmanager
@@ -137,3 +148,59 @@ def test_restart_marks_active_task_interrupted_and_keeps_artifact(tmp_path, monk
         assert artifact["value"]["text"] == "保留的历史证据"
     finally:
         second.close()
+
+
+def test_controller_identity_is_frozen_and_published(tmp_path):
+    """破坏点：若 state 没有完整冻结身份，Bridge 无法判断后台实例是否已过期。"""
+    config = make_config(tmp_path)
+    service = ControllerService(config)
+    try:
+        assert service.state["protocol_version"] == 2
+        assert len(service.state["implementation_sha256"]) == 64
+        assert len(service.state["config_sha256"]) == 64
+        assert len(service.state["instance_id"]) == 32
+        assert service.state["implementation_version"]
+
+        client = ControllerClient(config, autostart=False)
+        assert client.state["instance_id"] == service.state["instance_id"]
+        assert client.state["config_sha256"] == service.state["config_sha256"]
+        assert client.state["implementation_sha256"] == service.state["implementation_sha256"]
+    finally:
+        service.close()
+
+
+def test_config_change_rejects_running_controller(tmp_path):
+    """破坏点：后台 Runtime 已读取旧配置时，新 Bridge 不能继续把它当作当前配置实例。"""
+    config = make_config(tmp_path)
+    service = ControllerService(config)
+    try:
+        ControllerClient(config, autostart=False)
+        rewrite_config_with_changed_enabled_kinds(config)
+
+        with pytest.raises(WorkerError) as caught:
+            ControllerClient(config, autostart=False)
+
+        assert caught.value.code == "controller_stale_config"
+    finally:
+        service.close()
+
+
+def test_implementation_change_rejects_running_controller(tmp_path, monkeypatch):
+    """破坏点：代码已经更新但旧 Controller 仍存活时，新 Bridge 必须 fail-closed。"""
+    config = make_config(tmp_path)
+    service = ControllerService(config)
+    try:
+        ControllerClient(config, autostart=False)
+        monkeypatch.setattr(
+            controller_client_module,
+            "controller_implementation_sha256",
+            lambda: "f" * 64,
+            raising=False,
+        )
+
+        with pytest.raises(WorkerError) as caught:
+            ControllerClient(config, autostart=False)
+
+        assert caught.value.code == "controller_stale_implementation"
+    finally:
+        service.close()
