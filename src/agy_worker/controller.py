@@ -71,9 +71,13 @@ def run(config_path):
     def request_stop(_signum, _frame):
         service.stop_event.set()
 
-    for name in ("SIGINT", "SIGTERM"):
-        if hasattr(signal, name):
-            signal.signal(getattr(signal, name), request_stop)
+    # signal.signal 只能在 Python 主解释器的主线程注册。生产 Controller 从
+    # main() 在主线程运行；测试可把 run() 放入线程以验证完整生命周期，此时
+    # HTTP / stop_event 仍足以驱动关闭，不能让进程级 signal 注册破坏 finally。
+    if threading.current_thread() is threading.main_thread():
+        for name in ("SIGINT", "SIGTERM"):
+            if hasattr(signal, name):
+                signal.signal(getattr(signal, name), request_stop)
     try:
         service.wait()
     finally:
