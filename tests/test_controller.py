@@ -1,6 +1,8 @@
 """验证常驻 Controller 可被多个一次性 stdio Bridge 共同使用。"""
 import asyncio
+import json
 import sys
+import threading
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
@@ -10,7 +12,10 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+import agy_worker.controller as controller_module
 import agy_worker.controller_client as controller_client_module
+import agy_worker.manage as manage_module
+import agy_worker.runtime as runtime_module
 from agy_worker.common import WorkerError
 from agy_worker.controller import ControllerService
 from agy_worker.controller_client import ControllerClient
@@ -38,6 +43,30 @@ def rewrite_config_with_changed_enabled_kinds(config):
         text.replace("enabled_kinds = ['build']", "enabled_kinds = ['build', 'test']"),
         encoding="utf-8",
     )
+
+
+def wait_for_controller_state(config, timeout=3):
+    state_path = config.parent / "data" / "controller.json"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if state_path.exists():
+            return state_path, json.loads(state_path.read_text("utf-8"))
+        time.sleep(0.02)
+    raise AssertionError("Controller state 未在超时内发布")
+
+
+class JsonResponse:
+    def __init__(self, value):
+        self.raw = json.dumps(value).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self.raw
 
 
 @asynccontextmanager
@@ -204,3 +233,120 @@ def test_stale_implementation_rejects_running_controller(tmp_path, monkeypatch):
         assert caught.value.code == "controller_stale_implementation"
     finally:
         service.close()
+
+
+def test_management_stop_can_stop_older_protocol_controller(tmp_path, monkeypatch):
+    """普通业务拒绝旧协议，但显式管理停止必须仍能使用旧 state 自己的协议号。"""
+    config = make_config(tmp_path)
+    monkeypatch.setattr(controller_module, "PROTOCOL_VERSION", 1)
+    monkeypatch.setattr(runtime_module, "PROTOCOL_VERSION", 1)
+    thread = threading.Thread(target=controller_module.run, args=(config,), daemon=True)
+    thread.start()
+    state_path, _state = wait_for_controller_state(config)
+
+    with pytest.raises(WorkerError) as caught:
+        ControllerClient(config, autostart=False)
+    assert caught.value.code == "protocol_mismatch"
+
+    result = ControllerClient.stop_existing(config, timeout=3)
+    assert result["ok"] is True
+    assert result["status"] == "stopped"
+    thread.join(timeout=3)
+    assert not thread.is_alive()
+    assert not state_path.exists()
+
+
+def test_v2_stop_is_auth_only_but_business_call_stays_protocol_strict(tmp_path):
+    """跨协议兼容性只能扩大到 stop，不能让普通业务调用绕过协议检查。"""
+    config = make_config(tmp_path)
+    thread = threading.Thread(target=controller_module.run, args=(config,), daemon=True)
+    thread.start()
+    state_path, state = wait_for_controller_state(config)
+    client = ControllerClient(config, autostart=False)
+
+    bad_call = client._request(
+        state,
+        "/control/call",
+        {"protocol_version": 999, "method": "capabilities", "params": {}},
+        timeout=1,
+    )
+    assert bad_call["ok"] is False
+    assert bad_call["error"]["code"] == "protocol_mismatch"
+
+    stop = client._request(state, "/control/stop", {"protocol_version": 999}, timeout=1)
+    assert stop["ok"] is True
+    thread.join(timeout=3)
+    assert not thread.is_alive()
+    assert not state_path.exists()
+
+
+def test_management_stop_does_not_attack_replacement_instance(tmp_path, monkeypatch):
+    """stop 请求发出后若 state 已被新实例替换，不得再向 replacement 发送任何请求。"""
+    config = make_config(tmp_path)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    state_path = data_dir / "controller.json"
+    target = {
+        "protocol_version": 2,
+        "pid": 111,
+        "endpoint": "http://127.0.0.1:43123",
+        "token": "d" * 64,
+        "config_path": str(config.resolve()),
+        "started_at": "2026-09-09T12:00:00Z",
+        "instance_id": "a" * 32,
+    }
+    replacement = {
+        **target,
+        "pid": 222,
+        "token": "e" * 64,
+        "instance_id": "b" * 32,
+    }
+    state_path.write_text(json.dumps(target), encoding="utf-8")
+
+    class ReplacingOpener:
+        def __init__(self):
+            self.requests = []
+
+        def open(self, request, timeout=None):
+            self.requests.append(request)
+            if len(self.requests) != 1 or not request.full_url.endswith("/control/stop"):
+                raise AssertionError("replacement 出现后不得继续发送控制请求")
+            state_path.write_text(json.dumps(replacement), encoding="utf-8")
+            return JsonResponse({"ok": True, "status": "stopping"})
+
+    opener = ReplacingOpener()
+    monkeypatch.setattr(
+        controller_client_module.urllib.request,
+        "build_opener",
+        lambda *args, **kwargs: opener,
+    )
+
+    result = ControllerClient.stop_existing(config, timeout=1)
+    assert result["ok"] is True
+    assert result["status"] == "replaced"
+    assert len(opener.requests) == 1
+
+
+def test_manage_stop_accepts_custom_config(tmp_path, monkeypatch):
+    """manage stop --config 必须把指定配置传给管理停止，而不是偷用正式配置。"""
+    config = make_config(tmp_path)
+    called = {}
+
+    def fake_stop_existing(config_path, timeout=10):
+        called["config_path"] = Path(config_path).resolve()
+        called["timeout"] = timeout
+        return {"ok": True, "status": "stopped"}
+
+    monkeypatch.setattr(
+        manage_module.ControllerClient,
+        "stop_existing",
+        staticmethod(fake_stop_existing),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["agy_worker.manage", "stop", "--config", str(config)],
+    )
+
+    manage_module.main()
+    assert called["config_path"] == config.resolve()
