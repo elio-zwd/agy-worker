@@ -3,6 +3,7 @@ import argparse
 import asyncio
 import json
 import sys
+import tomllib
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
@@ -32,13 +33,21 @@ async def bridge(config):
             yield initialized, session
 
 
+def controller_state_path(config):
+    value = tomllib.loads(Path(config).read_text("utf-8"))
+    return Path(value["data_dir"]).resolve() / "controller.json"
+
+
 def stop_for_fresh_start(config):
-    """清理 --fresh 的既有目标；replacement 出现时 fail-closed，不追停新实例。"""
+    """清理 --fresh 的既有目标；state 仍存在但暂时不可达时必须 fail-closed。"""
     try:
         result = ControllerClient.stop_existing(config, timeout=10)
     except WorkerError as error:
         if error.code == "controller_unavailable":
-            return "not_running"
+            # stop_existing 的 controller_unavailable 既可能代表“根本没有 state”，
+            # 也可能代表“已有 state 但 stop 请求暂时无法连接”。--fresh 只能把前者
+            # 视为干净起点，后者必须停止验收，避免把可疑旧实例当成不存在。
+            return "unreachable" if controller_state_path(config).exists() else "not_running"
         raise
     return result.get("status", "unknown")
 
@@ -106,7 +115,7 @@ def main():
     parser.add_argument(
         "--fresh",
         action="store_true",
-        help="验收前停止该配置现有 Controller；若出现 replacement 则拒绝继续追停",
+        help="验收前停止该配置现有 Controller；若出现 replacement/不可达 state 则拒绝继续",
     )
     parser.add_argument(
         "--stop-after",
