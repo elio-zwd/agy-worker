@@ -36,7 +36,7 @@ def register(remove=False):
             raise ValueError('已有不同路径的同名 MCP，拒绝覆盖')
         servers[name]={'command':str(Path(sys.executable)),
           'args':['-m','agy_worker.server','--config',str(ROOT/'config/runtime.toml')],
-          'startup_timeout_sec':20,'tool_timeout_sec':30,
+          'startup_timeout_sec':20,'tool_timeout_sec':60,
           'env_vars':['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy','wss_proxy'],
           'enabled_tools':['agy_capabilities','agy_worker','agy_continue','agy_status','agy_cancel','agy_artifact_read']}
     if text:
