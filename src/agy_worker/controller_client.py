@@ -68,23 +68,14 @@ class ControllerClient:
         if state_config_path != self.config_path:
             raise WorkerError("controller_conflict", "数据目录正由另一份配置使用")
 
-        # legacy state 只用于诊断协议不一致；普通 Bridge 不会把它当作可用业务实例。
+        # 当前协议必须在任何网络访问前通过严格 state 校验；旧协议只保留
+        # 管理/诊断所需的最小字段，是否真的有活实例由 authenticated health 证明。
         if legacy.protocol_version != PROTOCOL_VERSION:
-            raise WorkerError("protocol_mismatch", "Controller 与 Bridge 协议版本不一致，请停止旧 Controller 后重试")
-
+            return legacy.model_dump()
         try:
-            state = ControllerState.model_validate(value).model_dump()
+            return ControllerState.model_validate(value).model_dump()
         except ValidationError as error:
             raise self._invalid_state("当前协议的 Controller state 缺失身份字段或包含未知字段") from error
-
-        if state["config_sha256"] != self.current_config_sha256:
-            raise WorkerError("controller_stale_config", "后台 Controller 仍使用旧配置；请显式停止旧 Controller 后重试")
-        if (
-            state["implementation_version"] != self.current_implementation_version
-            or state["implementation_sha256"] != self.current_implementation_sha256
-        ):
-            raise WorkerError("controller_stale_implementation", "后台 Controller 仍运行旧 Worker 实现；请显式停止旧 Controller 后重试")
-        return state
 
     def _request(self, state, path, payload=None, timeout=30):
         try:
@@ -115,13 +106,18 @@ class ControllerClient:
                 return False
             raise
 
+        # 先由 Bearer health 证明 endpoint 对应的是活 Controller，再判断协议和
+        # stale 身份；否则残留 controller.json 可能被误报成仍在运行的旧实例。
+        if result.get("protocol_version") != PROTOCOL_VERSION:
+            raise WorkerError("protocol_mismatch", "Controller 与 Bridge 协议版本不一致，请停止旧 Controller 后重试")
+        if state.get("protocol_version") != PROTOCOL_VERSION:
+            raise WorkerError("protocol_mismatch", "Controller 与 Bridge 协议版本不一致，请停止旧 Controller 后重试")
+
         try:
             health = ControllerHealth.model_validate(result)
         except ValidationError as error:
             raise self._invalid_state("Controller health 身份结构无效") from error
 
-        if health.protocol_version != PROTOCOL_VERSION:
-            raise WorkerError("protocol_mismatch", "Controller 与 Bridge 协议版本不一致，请停止旧 Controller 后重试")
         if health.config_sha256 != self.current_config_sha256:
             raise WorkerError("controller_stale_config", "后台 Controller 仍使用旧配置；请显式停止旧 Controller 后重试")
         if (
