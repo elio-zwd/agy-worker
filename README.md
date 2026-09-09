@@ -6,7 +6,7 @@
 
 Codex/GPT 负责需求、总控、判断、源码分析和核心修改。AGY 负责执行受控任务、读取高噪声内容、整理事实和证据。编译任务只采集错误原文与定位，不分析原因、不修代码。浏览器的 click 等细节只存在于 Worker 内部，不作为 Codex 的公开工具。
 
-实际链路：Codex → 能力发现与五个任务接口 → Runtime → 每轮独立 AGY CLI → 私有 Broker → 已授权执行器。Runtime 掌握命令、退出码、取消与证据；不能用 AGY 自称成功替代进程和产物验证。
+实际链路：Codex → 一次性 stdio Bridge → 常驻 Controller / 唯一 Runtime → 每轮独立 AGY CLI → 私有 Broker → 已授权执行器。Bridge 只处理 MCP 与本机转发；Controller 掌握命令、退出码、取消与证据，不能用 AGY 自称成功替代进程和产物验证。
 
 ## 当前可用范围
 
@@ -24,7 +24,7 @@ AGY 原生写文件、原生命令、其他 MCP 被 hook 拒绝；允许的只�
 
 ## 启动与接入
 
-安装后由 Codex 按需启动，不需要常驻窗口或计划任务。重新加载 MCP 或重启 Codex 后生效。
+安装后由 Codex 按需启动。首个 stdio Bridge 会通过 Windows WMI 在 MCP Job Object 之外隐藏启动 Controller，后续 Codex 对话连接同一个 Controller；不需要常驻窗口、计划任务或 Windows Service。重新加载 MCP 或重启 Codex 后生效。
 
 ```powershell
 Set-Location 'D:\My\_Elio\agy-worker'
@@ -35,7 +35,13 @@ pwsh.exe -NoProfile -File scripts/register.ps1
 
 `register.ps1` 登记 AGY 私有 Broker 及 Codex 的 `agy_worker`，保留其他 MCP。Codex 原配置备份在 `work/backups`，这些备份可能包含敏感配置，请勿提交。重新安装使用 `scripts/install.ps1 -Python <Python完整路径>`，依赖锁定在 `requirements.lock` 和 `vendor/browser/package-lock.json`。
 
-当前同一数据目录仅允许一个 Runtime。Codex 已连接后不要同时运行独立验收客户端；它会明确返回占用错误。`start.ps1` 是 stdio 服务入口，不是供人输入命令的窗口。
+同一数据目录仍只允许一个 Runtime，但可以同时存在多个 stdio Bridge。Bridge 同时首次连接时用启动锁协调，最终只有一个 Controller 取得 `runtime.lock`；Bridge 关闭不会停止 Controller 或任务。显式停止使用：
+
+```powershell
+pwsh.exe -NoProfile -File scripts/stop.ps1
+```
+
+停止会取消仍在运行的任务；再次调用工具会自动拉起 Controller。Controller 连接元数据保存在 `data/controller.json`，包含仅供当前本机 Bridge 使用的随机凭据；监听地址固定为 `127.0.0.1`。凭据安全依赖当前 Windows 用户及目录 ACL，当前版本仍不是系统安全沙箱。`start.ps1` 是 stdio Bridge 入口，不是供人输入命令的窗口。
 
 ## 公开 MCP 工具与资源
 
@@ -90,6 +96,12 @@ pwsh.exe -NoProfile -File scripts/register.ps1
 
 图片示例：`kind=vision`，`permissions.vision=true`，`inputs.files=["colors.png"]`，workspace_id 为 demo。日志任务对应 `kind=log`、`permissions.log=true` 和单个已登记工作区内的文件。
 
+## 维护者辅助清洗
+
+Codex 可以把依赖源码、长日志或大段终端输出作为只读文本任务交给 AGY 清洗，Codex 仍是实施主体。此模式要求目标只写“提取事实、定位和证据行号”，不让 AGY 判断架构、分析本项目根因或修改文件。AGY 的摘要必须由 Codex 回看原始证据后再用于改代码。
+
+需要检查尚未登记的依赖目录时，维护者可创建独立 Runtime 配置和数据目录，再用 `scripts/run-task.py --config <配置>` 运行；这不会扩大正式 Controller 的工作区。2026-09-09 已用此方式读取 MCP SDK 的 stdio 终止代码，AGY 只返回 Windows Job Object、两秒退出宽限和后代进程清理的行号证据，`source_changed=false`。
+
 ## 真实项目绑定
 
 源项目是 **`D:\My_Elio\life-archive-app`**，与 Worker 的 `D:\My\_Elio` 路径不同。该项目为 HBuilderX / uni-app，不使用 Gradle。
@@ -110,13 +122,13 @@ Runtime 复制 Git 跟踪文件、未忽略的未跟踪文件，以及已初始�
 
 编译摘要区分 AGY 执行状态与实际命令退出码。错误列表保留原文、可提取的文件/行列、Gradle task（如存在）及日志行引用；编译器未提供行列时返回 null，不编造。stdout 和 stderr 原始文件分开保存，合并日志是 stdout 后接 stderr，不能据此推断跨流时间顺序。
 
-默认不自动删除日志和会话副本，避免丢失证据。当前没有自动留存清理任务；本机磁盘需要自行管理，建议确认任务结束、导出证据后定期清理。取消通过 Windows Job Objects 终止本轮创建的进程树；既有共享 HBuilderX 可能继续已经提交的导出，不强杀用户 GUI。服务重启将未完成任务标为 interrupted，不自动重做外部操作。
+默认不自动删除日志和会话副本，避免丢失证据。当前没有自动留存清理任务；本机磁盘需要自行管理，建议确认任务结束、导出证据后定期清理。取消通过 Windows Job Objects 终止本轮创建的进程树；既有共享 HBuilderX 可能继续已经提交的导出，不强杀用户 GUI。Controller 重启将未完成任务标为 interrupted，不自动重做外部操作；历史 task、session 与 artifact 仍可查询。Controller 日志位于 `data/logs/controller.log`。
 
 ## 目录
 
 ```text
 config/runtime.toml       本机能力、工作区、固定命令
-src/agy_worker/           MCP、任务控制、Broker、hook、执行与证据模块
+src/agy_worker/           stdio Bridge、Controller、Runtime、Broker、hook、执行与证据模块
 scripts/                 安装、检查、注册、运行和 HBuilderX 适配器
 schemas/                 六个公开工具的 JSON Schema
 examples/                样例请求和最小验证项目
