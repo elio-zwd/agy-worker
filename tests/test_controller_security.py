@@ -116,3 +116,20 @@ def test_controller_state_rejects_missing_identity_before_network(tmp_path, monk
 
     assert caught.value.code == "controller_state_invalid"
     assert opener.called is False
+
+
+def test_stale_hash_is_not_reported_before_authenticated_health(tmp_path, monkeypatch):
+    """残留 state 本身不能证明旧 Controller 仍在运行；先做鉴权 health 再判断 stale。"""
+    config, data_dir = make_config(tmp_path)
+    write_state(data_dir, valid_state(config))
+    opener = RejectingOpener()
+    monkeypatch.setattr(
+        "agy_worker.controller_client.urllib.request.build_opener",
+        lambda *args, **kwargs: opener,
+    )
+
+    with pytest.raises(WorkerError) as caught:
+        ControllerClient(config, autostart=False)
+
+    assert caught.value.code == "controller_unavailable"
+    assert opener.called is True
