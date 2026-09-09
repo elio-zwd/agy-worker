@@ -121,6 +121,14 @@ git status --short
 
 重点：MCP server version 使用 package metadata，必须为 `0.3.1`。
 
+### 最终审查新增回归
+
+```powershell
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller_hardening_quality.py
+```
+
+重点：`--fresh` 不把仍存在但不可达的旧 state 当成 `not_running`；WMI 多次 launch 使用独立环境文件；超过清理窗口的遗留 proxy 环境文件会被清理而新鲜文件不受影响。
+
 ## 5. 权威全量检查
 
 仓库 `AGENTS.md` 的权威入口：
@@ -212,7 +220,7 @@ verification_passed == true
 exit code == 0
 ```
 
-`--fresh` 如果在停止目标时发现 replacement，脚本应 fail-closed，不应继续追停 replacement。
+`--fresh` 如果在停止目标时发现 replacement，或发现 state 仍存在但目标 stop 暂时不可达，脚本应 fail-closed，不应继续启动/追停 replacement。
 
 结束后：
 
@@ -334,7 +342,7 @@ $DoctorExit = $LASTEXITCODE
 Get-Content -LiteralPath work/doctor.json
 ```
 
-报告字段名是 **`data_dir_acl`**：
+报告字段名是 **`controller_data_acl`**，与 `SPEC.md` 合同一致：
 
 - `checked=true`：记录 `broad_read_principals` 与 `token_confidentiality_advisory`；
 - `checked=false`：记录 error，结论只能是“ACL 安全状态未确认”；
@@ -410,6 +418,11 @@ git log --oneline --decorate origin/main..HEAD
 - Exit code:
 - Summary:
 
+## Final-review regressions
+- Command:
+- Exit code:
+- Summary:
+
 ## Full repository check
 - Command: pwsh.exe -NoProfile -File scripts/check.ps1
 - Exit code:
@@ -437,7 +450,7 @@ git log --oneline --decorate origin/main..HEAD
 
 ## ACL advisory
 - doctor exit code:
-- data_dir_acl:
+- controller_data_acl:
 ```json
 ...
 ```
