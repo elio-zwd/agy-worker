@@ -5,10 +5,17 @@ import os
 import signal
 import sys
 import threading
+import uuid
 from pathlib import Path
 
 from .common import WorkerError, atomic_json, now
 from .controller_protocol import CONTROLLER_STATE_FILE, PROTOCOL_VERSION
+from .controller_state import (
+    ControllerState,
+    config_sha256,
+    controller_implementation_sha256,
+    implementation_version,
+)
 from .runtime import Runtime
 
 
@@ -18,20 +25,30 @@ class ControllerService:
     def __init__(self, config_path):
         self.config_path = Path(config_path).resolve()
         self.stop_event = threading.Event()
+        # 身份只在进程启动时计算一次。后台 Controller 不会因磁盘代码/配置变化
+        # 悄悄改变自己的身份，新 Bridge 因而能识别仍在运行的旧实例。
+        self.identity = {
+            "protocol_version": PROTOCOL_VERSION,
+            "implementation_version": implementation_version(),
+            "implementation_sha256": controller_implementation_sha256(),
+            "config_sha256": config_sha256(self.config_path),
+            "instance_id": uuid.uuid4().hex,
+        }
         self.runtime = Runtime(
             self.config_path,
             control_token=os.urandom(32).hex(),
             control_stop=self.stop_event.set,
+            controller_identity=self.identity,
         )
         self.state_path = self.runtime.root / CONTROLLER_STATE_FILE
-        self.state = {
-            "protocol_version": PROTOCOL_VERSION,
-            "pid": os.getpid(),
-            "endpoint": self.runtime.endpoint,
-            "token": self.runtime.control_token,
-            "config_path": str(self.config_path),
-            "started_at": now(),
-        }
+        self.state = ControllerState(
+            **self.identity,
+            pid=os.getpid(),
+            endpoint=self.runtime.endpoint,
+            token=self.runtime.control_token,
+            config_path=str(self.config_path),
+            started_at=now(),
+        ).model_dump()
         # 只有 Runtime、HTTP 监听和鉴权都就绪后才发布，Bridge 不会连到半启动进程。
         atomic_json(self.state_path, self.state)
 
