@@ -27,6 +27,8 @@ from .controller_protocol import PROTOCOL_VERSION
 from .processes import run_process
 
 TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "interrupted"}
+MAX_CONCURRENT_TASKS = 1
+MAX_INFLIGHT_TASKS = 16
 READ_BROWSER = {"list_pages", "new_page", "navigate_page", "take_snapshot", "take_screenshot",
                 "list_console_messages", "get_console_message", "list_network_requests", "get_network_request", "wait_for"}
 WRITE_BROWSER = {"click", "fill", "fill_form", "press_key", "hover", "type_text"}
@@ -67,7 +69,7 @@ class Runtime:
         self.db.commit()
         self.active = {}
         self.tokens = {}
-        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TASKS)
         for row in self.db.execute("SELECT record FROM tasks").fetchall():
             record = json.loads(row[0])
             if record["status"] not in TERMINAL:
@@ -240,7 +242,8 @@ class Runtime:
                     item["known_worktrees"]=[str(source)]
             workspaces.append(item)
         return {"schema_version":1,"enabled_kinds":self.config["enabled_kinds"],
-                "controller":{"protocol_version":PROTOCOL_VERSION,"single_runtime":True,"max_concurrent_tasks":1},
+                "controller":{"protocol_version":PROTOCOL_VERSION,"single_runtime":True,
+                              "max_concurrent_tasks":MAX_CONCURRENT_TASKS,"max_inflight_tasks":MAX_INFLIGHT_TASKS},
                 "limits":{"total_timeout_sec":{"default":300,"min":10,"max":1800},
                           "summary_max_bytes":{"default":16384,"min":2048,"max":16384},
                           "artifact_max_bytes":{"default":536870912,"min":1048576,"max":536870912}},
@@ -281,6 +284,8 @@ class Runtime:
                 raise WorkerError("invalid_request", "日志和图片任务必须指定输入文件")
             if request.kind=="log" and len(request.inputs.files)!=1:
                 raise WorkerError("invalid_request", "当前每个日志任务只接受一个文件，多个文件分别提交")
+
+            next_turn = None
             if isinstance(request,ContinueRequest):
                 row = self.db.execute("SELECT record FROM sessions WHERE id=?",(request.session_id,)).fetchone()
                 if not row:
@@ -298,13 +303,23 @@ class Runtime:
                     raise WorkerError("invalid_request","AGY 未产生可续接会话")
                 if any(c["record"]["session_id"]==session["session_id"] for c in self.active.values()):
                     raise WorkerError("session_busy","上一轮仍在运行")
-                session["turn"] += 1
+                next_turn = session["turn"] + 1
             else:
                 workspace,source=self._resolve_workspace(request.workspace_id,request.workspace_path)
-                session={"session_id":"session-"+uuid.uuid4().hex,"workspace_id":request.workspace_id,
-                         "source_path":str(source),"turn":1,"conversation_id":None}
+                session=None
+
             for relative in request.inputs.files:
                 safe_path(source,relative)
+
+            # 幂等和所有无副作用验证之后才做容量 gate；拒绝时不创建 session/task/artifact。
+            if len(self.active) >= MAX_INFLIGHT_TASKS:
+                raise WorkerError("worker_busy", f"Worker 当前已有 {MAX_INFLIGHT_TASKS} 个待执行或运行任务，请稍后重试")
+
+            if isinstance(request,ContinueRequest):
+                session["turn"] = next_turn
+            else:
+                session={"session_id":"session-"+uuid.uuid4().hex,"workspace_id":request.workspace_id,
+                         "source_path":str(source),"turn":1,"conversation_id":None}
             task_id="task-"+uuid.uuid4().hex
             directory=self.root/"tasks"/task_id
             directory.mkdir(parents=True)
@@ -312,14 +327,16 @@ class Runtime:
                     "request":spec,"fingerprint":fingerprint,"created_at":now(),"revision":0}
             context={"record":record,"request":request,"session":session,"directory":directory,"source":source,
                      "cancel":threading.Event(),"operation_lock":threading.Lock(),"browser":None,"operation":None,
-                     "artifacts":Artifacts(directory),"started":None,"actions":0}
+                     "artifacts":Artifacts(directory),"started":None,"actions":0,"future":None}
             self._session(session)
             self._save(record)
             atomic_json(directory/"request.json",spec)
             atomic_json(directory/"permissions.json",{"effective":spec["permissions"],"workspace_path":str(source),
                                                        "enforcement":"hook_and_broker","os_isolation":False})
             self.active[task_id]=context
-            self.pool.submit(self._run,context)
+            # submit() 仍在 Runtime RLock 内；极快启动的 worker 在第一次 _save() 前会等待，
+            # 因而 Future 会先稳定地写回 context，cancel 不会观察到半初始化状态。
+            context["future"]=self.pool.submit(self._run,context)
             return self.public(record)
 
     def public(self, record):
@@ -342,9 +359,16 @@ class Runtime:
             context=self.active.get(task_id)
             if context:
                 context["cancel"].set()
-                context["record"]["status"]="cancelling"
-                self.audit(context,"cancel",reason=reason)
-                self._save(context["record"])
+                future=context.get("future")
+                if future is not None and future.cancel():
+                    context["record"]["status"]="cancelled"
+                    self.audit(context,"cancel",reason=reason,queued=True)
+                    self._save(context["record"])
+                    self.active.pop(task_id,None)
+                else:
+                    context["record"]["status"]="cancelling"
+                    self.audit(context,"cancel",reason=reason,queued=False)
+                    self._save(context["record"])
         return self.status(task_id)
 
     def read_artifact(self, task_id, artifact_id, **kwargs):
