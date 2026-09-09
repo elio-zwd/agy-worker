@@ -1,4 +1,4 @@
-"""Controller 连接元数据必须在任何网络访问前完成严格校验。"""
+"""Controller 连接元数据与凭据目录必须提供可验证的本机安全诊断。"""
 import hashlib
 import json
 from pathlib import Path
@@ -6,8 +6,12 @@ from pathlib import Path
 import pytest
 
 import agy_worker.controller_state as controller_state_module
+import agy_worker.runtime as runtime_module
+import agy_worker.security as security_module
 from agy_worker.common import WorkerError
 from agy_worker.controller_client import ControllerClient
+from agy_worker.runtime import Runtime
+from agy_worker.security import classify_broad_read_principals, inspect_data_dir_acl
 
 
 class RejectingOpener:
@@ -160,3 +164,57 @@ def test_controller_implementation_digest_matches_fixed_persistent_module_set():
         expected.update(b"\0")
 
     assert controller_state_module.controller_implementation_sha256() == expected.hexdigest()
+
+
+def test_acl_classifier_only_flags_broad_read_grants():
+    read = security_module.FILE_READ_DATA
+    entries = [
+        {"sid": "S-1-5-21-1000", "principal": "WORKSTATION\\elio", "access_mask": read, "allowed": True},
+        {"sid": "S-1-5-18", "principal": "NT AUTHORITY\\SYSTEM", "access_mask": security_module.GENERIC_ALL, "allowed": True},
+        {"sid": "S-1-5-32-544", "principal": "BUILTIN\\Administrators", "access_mask": security_module.GENERIC_ALL, "allowed": True},
+        {"sid": "S-1-1-0", "principal": "Everyone", "access_mask": read, "allowed": True},
+        {"sid": "S-1-5-32-545", "principal": "BUILTIN\\Users", "access_mask": security_module.GENERIC_READ, "allowed": True},
+        {"sid": "S-1-5-11", "principal": "NT AUTHORITY\\Authenticated Users", "access_mask": security_module.GENERIC_READ, "allowed": True},
+        # deny ACE 与无读取权限的 allow ACE 都不能当作宽泛读取 grant。
+        {"sid": "S-1-1-0", "principal": "Everyone", "access_mask": read, "allowed": False},
+        {"sid": "S-1-1-0", "principal": "Everyone", "access_mask": 0x00000002, "allowed": True},
+    ]
+
+    assert classify_broad_read_principals(entries) == [
+        "Everyone",
+        "BUILTIN\\Users",
+        "NT AUTHORITY\\Authenticated Users",
+    ]
+
+
+def test_acl_api_failure_is_unknown_not_safe(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        security_module,
+        "_read_acl_entries",
+        lambda _path: (_ for _ in ()).throw(OSError("ACL API unavailable")),
+    )
+
+    report = inspect_data_dir_acl(tmp_path)
+
+    assert report["checked"] is False
+    assert report["broad_read_principals"] == []
+    assert report["token_confidentiality_advisory"] is False
+    assert "ACL API unavailable" in report["error"]
+
+
+def test_capabilities_reports_acl_unknown_without_failing(tmp_path, monkeypatch):
+    runtime = object.__new__(Runtime)
+    runtime.root = tmp_path
+    runtime.config = {"enabled_kinds": [], "workspaces": {}}
+    unknown = {
+        "checked": False,
+        "broad_read_principals": [],
+        "token_confidentiality_advisory": False,
+        "error": "mock failure",
+    }
+    monkeypatch.setattr(runtime_module, "inspect_data_dir_acl", lambda _path: unknown)
+
+    capabilities = runtime.capabilities()
+
+    assert capabilities["controller"]["data_dir_acl"] == unknown
+    assert capabilities["permissions"]["os_isolation"] is False
