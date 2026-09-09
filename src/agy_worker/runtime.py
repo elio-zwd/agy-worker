@@ -43,7 +43,7 @@ def origin(url):
 
 
 class Runtime:
-    def __init__(self, config_path, *, control_token=None, control_stop=None):
+    def __init__(self, config_path, *, control_token=None, control_stop=None, controller_identity=None):
         self.config_path = Path(config_path).resolve()
         self.config = tomllib.loads(self.config_path.read_text("utf-8"))
         self.root = Path(self.config["data_dir"])
@@ -51,6 +51,7 @@ class Runtime:
         self.lock = threading.RLock()
         self.control_token = control_token
         self.control_stop = control_stop
+        self.controller_identity = dict(controller_identity or {})
         # 同一数据目录只允许一个控制端，避免并行实例重复恢复和重跑任务。
         import msvcrt
         self.lockfile = (self.root / "runtime.lock").open("a+b")
@@ -97,7 +98,9 @@ class Runtime:
                 if self.path != "/control/health" or not self.control_authorized():
                     self.send_json({"status": "denied"})
                     return
-                self.send_json({"status": "ready", "protocol_version": PROTOCOL_VERSION, "pid": os.getpid()})
+                identity = dict(runtime.controller_identity)
+                identity.setdefault("protocol_version", PROTOCOL_VERSION)
+                self.send_json({"status": "ready", **identity, "pid": os.getpid()})
 
             def do_POST(self):
                 try:
