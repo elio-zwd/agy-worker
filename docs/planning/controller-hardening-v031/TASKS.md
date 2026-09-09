@@ -25,10 +25,10 @@
 ## 当前总状态
 
 ```text
-phase: t1_red
+phase: t1_implementation
 production_code_changed: false
 user_plan_approval: approved_2026-09-09
-local_test_evidence_for_this_branch: awaiting_t1_red
+local_test_evidence_for_this_branch: t1_red_verified
 open_pr: none
 merge_authorized: false
 ```
@@ -37,7 +37,7 @@ merge_authorized: false
 
 | ID | Priority | 任务 | ChatGPT | 本地 AI | 当前状态 |
 |---|---|---|---|---|---|
-| T1 | P0 | Controller v2 身份 / stale config & implementation | 实现、审查 | RED/GREEN | `red_written` |
+| T1 | P0 | Controller v2 身份 / stale config & implementation | 实现、审查 | RED/GREEN | `red_verified` |
 | T2 | P0 | 跨协议显式 stop + `--config` stop | 实现、审查 | RED/GREEN + Windows stop | `planned` |
 | T3 | P0 | 启动锁 takeover / launch retry | 实现、审查 | RED/GREEN + WMI lifecycle | `planned` |
 | T4 | P0 | custom `run-task --config` ownership / cleanup | 实现、审查 | RED/GREEN + no-leak | `planned` |
@@ -49,7 +49,7 @@ merge_authorized: false
 
 ## T1 — Controller v2 身份 / stale 检测
 
-**Status:** `red_written`
+**Status:** `red_verified`
 
 **必须交付：**
 
@@ -71,15 +71,26 @@ Tests committed:
 - 0c2d10d1ec791800aeef4e41eef3ce7e8c043121  tests/test_controller_security.py
 - cb79ddef52c3372c6ca9f5a6b8af8f9d96fc02f4  tests/test_controller.py identity/stale cases
 
-Required local execution:
+Local verification environment:
+- branch: fix/controller-hardening-v031
+- HEAD: b8781a7570a50a98b12018146ff59ae60a9d966f
+- git status --short: clean
+
+Command 1:
 & ./.venv/Scripts/python.exe -m pytest -q tests/test_controller_security.py
+Actual: 11 failed in 0.62s
+Break observed: expected controller_state_invalid, actual controller_unavailable. Illegal/ambiguous endpoint, unknown fields and missing v2 identity reached the old network-oriented path instead of being rejected as state validation failures.
+
+Command 2:
 & ./.venv/Scripts/python.exe -m pytest -q tests/test_controller.py -k "stale or identity"
+Actual: 1 failed, 5 deselected in 2.14s
+Break observed: test_controller_identity_is_frozen_and_published expected protocol_version == 2, actual 1.
 
-Expected RED:
-- security tests fail because v0.3 does not validate strict v2 state/endpoint before network access;
-- identity/stale tests fail because v0.3 publishes protocol 1 without frozen config/implementation/instance identity and does not reject a stale running Controller.
-
-Actual local output: pending
+Technical evaluation:
+- pytest collection/execution succeeded;
+- no syntax/fixture/environment/dependency error was reported;
+- failures correspond directly to missing T1 production behavior;
+- RED accepted as valid on 2026-09-09.
 ```
 
 **GREEN evidence:**
@@ -91,13 +102,13 @@ not run
 **Commit:**
 
 ```text
-production implementation not created; TDD gate waiting for RED evidence
+production implementation not created yet
 ```
 
 **Review findings:**
 
 ```text
-RED test design review: assertions target externally observable WorkerError codes/state identity and network-before-validation behavior; no source-text grep assertions.
+RED evidence technically reviewed under receiving-code-review: valid behavioral failures, no test harness blocker found.
 ```
 
 ## T2 — 跨协议显式 stop / custom config stop
@@ -267,7 +278,7 @@ RED test design review: assertions target externally observable WorkerError code
 
 | Date | Task | Evidence | Finding | ChatGPT 技术判断 | Action |
 |---|---|---|---|---|---|
-| — | — | — | — | — | — |
+| 2026-09-09 | T1 RED | `tests/test_controller_security.py`: 11 failed；`tests/test_controller.py -k "stale or identity"`: 1 failed / 5 deselected；clean worktree | state/endpoint/v2 identity 行为缺失，且不是测试环境错误 | 接受为有效 RED | 进入 T1 最小实现 |
 
 ## 决策日志
 
@@ -291,7 +302,7 @@ RED test design review: assertions target externally observable WorkerError code
 
 ### 2026-09-09 / D4 — custom `--config` 默认 ephemeral ownership
 
-决定：只有显式 custom config 且由本次 run-task 真正启动的 Controller 默认随脚本清理；正式默认 config 继续 persistent。
+决定：只有显式 custom config 且由本次 run-task 真正启动的 instance 默认随脚本清理；正式默认 config 继续 persistent。
 
 原因：保留生产使用体验，同时消除维护清洗遗留隐藏 Controller。
 
@@ -310,9 +321,9 @@ RED test design review: assertions target externally observable WorkerError code
 ## 下一动作
 
 ```text
-本地 AI 拉取 fix/controller-hardening-v031
-→ 执行 T1 两组 RED 命令并返回完整 pytest 摘要/失败原因
-→ ChatGPT 技术复核 RED 证据
-→ T1 状态改为 red_verified
-→ ChatGPT 才开始 T1 生产实现
+T1 RED 已由本地 AI 验证并由 ChatGPT 技术复核
+→ ChatGPT 实现 Controller v2 identity / state / stale detection
+→ 提交 green candidate
+→ 本地 AI 执行 T1 GREEN
+→ ChatGPT 规格复核 + 代码质量复核
 ```
