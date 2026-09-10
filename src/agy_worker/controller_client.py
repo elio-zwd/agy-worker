@@ -234,6 +234,8 @@ class ControllerClient:
 
         # 先由 Bearer health 证明 endpoint 对应的是活 Controller，再判断协议和
         # stale 身份；否则残留 controller.json 可能被误报成仍在运行的旧实例。
+        if not isinstance(result, dict):
+            raise self._invalid_state("Controller health 身份结构无效")
         if result.get("protocol_version") != PROTOCOL_VERSION:
             raise WorkerError("protocol_mismatch", "Controller 与 Bridge 协议版本不一致，请停止旧 Controller 后重试")
         if state.get("protocol_version") != PROTOCOL_VERSION:
