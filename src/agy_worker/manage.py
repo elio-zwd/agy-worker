@@ -17,6 +17,46 @@ from .models import (WorkerRequest,ContinueRequest,StatusRequest,CancelRequest,
 from .security import inspect_data_dir_acl
 
 ROOT=Path(__file__).resolve().parents[2]
+CODEX_ROUTING_BEGIN="<AGY_WORKER_ROUTING>"
+CODEX_ROUTING_END="</AGY_WORKER_ROUTING>"
+CODEX_ROUTING_BLOCK=(
+    f"{CODEX_ROUTING_BEGIN}\n"
+    "当用户要求‘让 AGY/agy’执行已支持的编译、测试、日志、浏览器、图片或 Android UI 任务时，必须走 `agy_worker` MCP；"
+    "不得用 shell/terminal 直接调用 `agy`、`agy.exe`、`agy -p`，正常任务也不要先跑 `agy --help` 探测。"
+    "MCP 不可用时明确报告，不得静默回退。仅安装、更新、诊断 AGY CLI 本身或 agy-worker 维护脚本明确需要时，才可直接调用 CLI。\n"
+    f"{CODEX_ROUTING_END}"
+)
+
+
+def _install_codex_routing(current):
+    """在既有 developer_instructions 末尾追加唯一的 Worker 路由块。"""
+    if current is None:
+        return CODEX_ROUTING_BLOCK
+    text=str(current)
+    begin_count=text.count(CODEX_ROUTING_BEGIN)
+    end_count=text.count(CODEX_ROUTING_END)
+    if begin_count or end_count:
+        if begin_count==1 and end_count==1 and (
+            text==CODEX_ROUTING_BLOCK or text.endswith("\n\n"+CODEX_ROUTING_BLOCK)
+        ):
+            return text
+        raise ValueError("Codex developer_instructions 中存在冲突或损坏的 AGY Worker 路由指令标记，拒绝覆盖")
+    return text+"\n\n"+CODEX_ROUTING_BLOCK
+
+
+def _remove_codex_routing(current):
+    """卸载时只删除本安装追加在末尾的路由块，保留用户原有指令。"""
+    if current is None:
+        return None
+    text=str(current)
+    if text==CODEX_ROUTING_BLOCK:
+        return None
+    suffix="\n\n"+CODEX_ROUTING_BLOCK
+    if text.endswith(suffix):
+        return text[:-len(suffix)]
+    if CODEX_ROUTING_BEGIN in text or CODEX_ROUTING_END in text:
+        raise ValueError("Codex developer_instructions 中存在冲突或损坏的 AGY Worker 路由指令标记，拒绝覆盖")
+    return text
 
 
 def register(remove=False):
@@ -26,14 +66,23 @@ def register(remove=False):
     document=tomlkit.parse(text)
     servers=document.setdefault('mcp_servers',tomlkit.table())
     name='agy_worker'
+    current_instructions=document.get('developer_instructions')
     if remove:
         current=servers.get(name)
         if current and Path(str(current.get('command',''))).resolve()!=Path(sys.executable).resolve():
             raise ValueError('已有同名 MCP 不属于本安装，拒绝移除')
+        next_instructions=_remove_codex_routing(current_instructions)
         servers.pop(name,None)
+        if next_instructions is None:
+            if current_instructions is not None:
+                document.pop('developer_instructions',None)
+        elif current_instructions is not None and next_instructions!=str(current_instructions):
+            document['developer_instructions']=next_instructions
     else:
         if name in servers and str(servers[name].get('command',''))!=str(Path(sys.executable)):
             raise ValueError('已有不同路径的同名 MCP，拒绝覆盖')
+        next_instructions=_install_codex_routing(current_instructions)
+        document['developer_instructions']=next_instructions
         servers[name]={'command':str(Path(sys.executable)),
           'args':['-m','agy_worker.server','--config',str(ROOT/'config/runtime.toml')],
           'startup_timeout_sec':20,'tool_timeout_sec':60,
