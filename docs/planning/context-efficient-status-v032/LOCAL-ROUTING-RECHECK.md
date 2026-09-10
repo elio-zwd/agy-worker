@@ -10,7 +10,7 @@ branch: perf/context-efficient-status-v032
 base: b51d81701f3cfe3859c485f87e42a03b22b4e3d7
 PREVIOUS_LOCAL_FAIL_HEAD: b34e9879cf60776a2970f56884fc1efecd99d531
 PREVIOUS_MCP_REQUEST_STATUS_TARGET_HEAD: 094445f4c57663375a725ecae74d236ddaa24567
-ADAPTIVE_STATUS_WAIT_TARGET_HEAD: 36d820aac4786eafdfb047a08e8fe038392f63d9
+ADAPTIVE_STATUS_WAIT_TARGET_HEAD: 02201bd5b779117fb9e04c808b36e95ea80996be
 package: 0.3.2
 controller protocol: 2
 MCP tools: 6
@@ -20,7 +20,7 @@ internal controller status slice: <=25000 ms
 Codex MCP tool_timeout_sec: 660
 ```
 
-`ADAPTIVE_STATUS_WAIT_TARGET_HEAD` 包含本轮自适应等待的生产代码、公开 schema 与测试；`094445f...` 是上一版固定 25 秒策略的旧 target，已被本 target 取代。新 target 之后只允许 `README.md`、`docs/planning/context-efficient-status-v032/**`、`docs/实施设计.md` 等文档变化；若 target 之后出现新的 `src/`、`tests/`、scripts、config、依赖或任何 `AGENTS.md` 变化，停止并报告。
+`ADAPTIVE_STATUS_WAIT_TARGET_HEAD` 包含本轮自适应等待的全部生产代码、公开 schema 与测试，包括 deadline 到达后的最终即时 status 快照边界；`094445f...` 是上一版固定 25 秒策略的旧 target，已被本 target 取代。新 target 之后只允许 `README.md`、`docs/planning/context-efficient-status-v032/**`、`docs/实施设计.md` 等文档变化；若 target 之后出现新的 `src/`、`tests/`、scripts、config、依赖或任何 `AGENTS.md` 变化，停止并报告。
 
 ## 1. 上一轮已确认事实与本轮变化
 
@@ -43,6 +43,8 @@ real jianyu_compile_test: succeeded, exit 0, errors 0, warnings 26
 
 `094445f...` 随后收缩了 MCP worker/continue schema 并在 MCP server 内 coalesce progress revision。用户进一步确认新的 status 策略：**公开默认 50 秒，Codex 可自主选择 50～600 秒；MCP 内部仍按最多 25 秒的 Controller long-poll 分片；AGY 提前 terminal 时当前 tool call 立即返回。** 本轮不实现 webhook、push notification、MCP Tasks subscription，不改 Runtime progress 记录、Controller protocol、权限执行层、工具数量或单执行槽，也不修改任何 `AGENTS.md`。
 
+规格审查额外发现一个截止点竞态：若最后一个内部 long-poll 返回 running/unchanged 后恰好跨过公开 deadline，而任务在该边界已经 terminal，直接返回旧 `latest` 会延迟终态到下一轮 Codex status。`02201bd...` 已改为 deadline 到达时再执行一次内部 `wait_ms=0` 最终快照；对应回归在 `tests/test_adaptive_status_deadline.py`。
+
 ## 2. 安全前置与 HEAD
 
 ```powershell
@@ -52,7 +54,7 @@ git fetch origin
 git switch perf/context-efficient-status-v032
 git pull --ff-only origin perf/context-efficient-status-v032
 $Head = (git rev-parse HEAD).Trim()
-$Target = '36d820aac4786eafdfb047a08e8fe038392f63d9'
+$Target = '02201bd5b779117fb9e04c808b36e95ea80996be'
 git merge-base --is-ancestor $Target HEAD
 Write-Host "adaptive_status_wait_target_is_ancestor exit=$LASTEXITCODE"
 git diff --name-only "$Target..HEAD"
@@ -191,6 +193,10 @@ wait_ms=<可省略，或 Codex 自主选择 50000..600000>
 
 总等待 deadline 不能因中间 revision 重置。若 Codex 选择 `wait_ms=120000`，不是“每个 revision 再等 120 秒”；内部应按剩余预算切成多个不超过 25000ms 的 Controller long-poll。
 
+### deadline 最终快照硬条件
+
+若最后一个内部 long-poll 返回 running/unchanged 后公开总 deadline 已到，MCP 必须再执行一次内部 `wait_ms=0` 最终快照；若任务已经 terminal，应直接返回 terminal，不能把此前缓存的 running/unchanged 当作本轮最终结果。该最终快照不重新开启新的等待窗口。
+
 ### terminal 提前返回硬条件
 
 长预算不是固定 sleep。若一次外部 status 选择例如 `wait_ms=120000`，而 AGY 在调用后约 20 秒进入 terminal，本次 tool call 应在 terminal 出现后尽快返回；不得继续等待到 120 秒。若实际业务构建没有自然形成便于判断的场景，可以用等价受控 probe 验证，但要区分 probe 与真实业务证据。
@@ -262,6 +268,7 @@ internal_status_wait_values_if_observed:
 internal_status_wait_all_le_25000: yes/no/unknown
 progress_revision_roundtrip_pattern:
 total_deadline_reset_seen: yes/no/unknown
+deadline_final_snapshot_seen: yes/no/unknown
 long_wait_terminal_early_return: yes/no/not_observed
 long_wait_selected_ms_if_observed:
 long_wait_actual_elapsed_if_observed:
