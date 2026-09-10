@@ -171,7 +171,7 @@ def test_terminal_public_result_is_compact_and_keeps_artifact_drill_down(runtime
     errors=[{'file':f'src/Error{index}.kt','line':index+1,'message':'错误'+('很长的诊断信息'*80)} for index in range(20)]
     warnings=[{'file':f'src/Warning{index}.kt','line':index+1,'message':'警告'+('很长的诊断信息'*80)} for index in range(20)]
     diagnostics_path=context['directory']/'errors.json'
-    diagnostics_path.write_text(json.dumps({'errors':errors,'warnings':warnings},ensure_ascii=False),encoding='utf-8')
+    diagnostics_path.write_text(json.dumps({'errors':errors,'warnings':warnings},ensure_ascii=False,indent=2),encoding='utf-8')
     context['artifacts'].add('errors',diagnostics_path)
     full_result={
         'schema_version':1,
