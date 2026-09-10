@@ -1,4 +1,5 @@
 """验证 Codex 注册不会绕过 agy_worker，也不会覆盖用户既有全局指令。"""
+import json
 from pathlib import Path
 
 import pytest
@@ -161,3 +162,18 @@ def test_worker_tool_description_explicitly_prevents_direct_agy_cli_fallback():
     assert "聊天" in description
     assert "线程" in description
     assert "subagent" in description
+
+
+def test_schema_generation_uses_public_status_wait_contract(monkeypatch, tmp_path):
+    """重新生成 schema 时必须保留 MCP 的 50～600 秒合同，不能泄漏内部 25 秒模型。"""
+    root=tmp_path/'worker'
+    (root/'schemas').mkdir(parents=True)
+    monkeypatch.setattr(manage,'ROOT',root)
+
+    manage.schemas()
+
+    schema=json.loads((root/'schemas/agy_status.json').read_text('utf-8'))
+    wait_schema=schema['properties']['wait_ms']
+    assert wait_schema['default']==50000
+    assert wait_schema['minimum']==50000
+    assert wait_schema['maximum']==600000
