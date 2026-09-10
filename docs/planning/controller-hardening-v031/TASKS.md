@@ -19,7 +19,7 @@
 ## 当前总状态
 
 ```text
-phase: accepted_ready_for_draft_pr
+phase: draft_pr_open_waiting_user_merge_decision
 production_code_changed: true
 user_plan_approval: approved_2026-09-09
 base: 904b75a6e7b9d0b75c0ae8f63924c3ed0acf5066
@@ -30,7 +30,7 @@ remote_spec_review: completed_no_open_critical_or_important
 remote_code_quality_review: completed_no_open_critical_or_important
 acceptance_evidence_review: completed_consistent_with_current_code_contract
 post_acceptance_changes: documentation_only_acceptance_record
-open_pr: pending_draft_creation
+open_pr: "#1_draft"
 merge_authorized: false
 ```
 
@@ -243,15 +243,19 @@ origin/main...HEAD git diff --check: exit 0, no output
 
 ## 集成状态
 
-当前可以进入 `finishing-a-development-branch` 的 PR 交付路径：
+Draft PR 已创建：
 
 ```text
+PR: #1
+URL: https://github.com/elio-zwd/agy-worker/pull/1
+state: open
+mode: Draft
+base: main
 validated executable tree: b00a5a8853336c345fc186bb9049c44931f19149
 final local acceptance: PASS
 remote spec/code-quality review: no open Critical/Important
-Draft PR: pending creation
 merge to main: NOT authorized
 branch deletion: NOT authorized
 ```
 
-最终 merge 由用户决定。
+feature branch 保留用于 PR review；最终 merge 由用户决定。
