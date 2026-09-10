@@ -25,6 +25,20 @@ class RejectingOpener:
         raise OSError("测试不允许访问网络")
 
 
+class JsonResponse:
+    def __init__(self, value):
+        self.raw = json.dumps(value).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self.raw
+
+
 def make_config(tmp_path):
     data_dir = tmp_path / "data"
     config = tmp_path / "runtime.toml"
@@ -140,6 +154,27 @@ def test_stale_hash_is_not_reported_before_authenticated_health(tmp_path, monkey
 
     assert caught.value.code == "controller_unavailable"
     assert opener.called is True
+
+
+def test_controller_rejects_non_object_authenticated_health(tmp_path, monkeypatch):
+    """鉴权 health 即使是合法 JSON，也必须先验证为对象再读取协议字段。"""
+    config, data_dir = make_config(tmp_path)
+    write_state(data_dir, valid_state(config))
+
+    class NonObjectHealthOpener:
+        def open(self, request, timeout=None):
+            assert request.full_url.endswith("/control/health")
+            return JsonResponse([])
+
+    monkeypatch.setattr(
+        "agy_worker.controller_client.urllib.request.build_opener",
+        lambda *args, **kwargs: NonObjectHealthOpener(),
+    )
+
+    with pytest.raises(WorkerError) as caught:
+        ControllerClient(config, autostart=False)
+
+    assert caught.value.code == "controller_state_invalid"
 
 
 def test_controller_implementation_digest_matches_fixed_persistent_module_set():
