@@ -1,103 +1,63 @@
 # AGY Worker v0.3.2 Context-Efficient Status Hub
 
-本目录是 `perf/context-efficient-status-v032` 的跨对话持久上下文。目标是让 Codex 默认只接收足够做下一步判断的摘要，完整诊断按需从 artifact 读取。
+本目录是 `perf/context-efficient-status-v032` 的跨对话持久上下文。目标是让 Codex 默认只接收足够做下一步判断的摘要，完整诊断按需从 artifact 读取，并确保用户明确说“让 AGY/agy 做任务”时不会绕过 Worker 直接执行 AGY CLI。
 
 ## 阅读顺序
 
-1. `SPEC.md` — 最终 compact status/result 合同、字节预算、兼容范围和完成定义。
+1. `SPEC.md` — compact status/result 合同、字节预算和原始完成定义。
 2. `TASKS.md` — **唯一当前进度状态源**。
-3. `LOCAL-ACCEPTANCE.md` — 首轮 Windows + 真实 AGY 验收协议。
-4. `LOCAL-RECHECK.md` — 5 个测试回归修正后的最小复验协议。
-5. `PLAN.md` — 原始 T1～T4 实施计划。
+3. `LOCAL-ROUTING-RECHECK.md` — 2026-09-10 真实 Codex 绕过 MCP 后的新增复验协议。
+4. `LOCAL-ACCEPTANCE.md` — 首轮 Windows + 真实 AGY payload 验收。
+5. `LOCAL-RECHECK.md` — 首轮测试回归修正后的复验记录。
+6. `PLAN.md` — 原始 T1～T4 实施计划。
 
 ## 当前状态
 
 ```text
 base: b51d81701f3cfe3859c485f87e42a03b22b4e3d7
 branch: perf/context-efficient-status-v032
-phase: accepted
-production code head: 2b9ef842e4eb52bed7c00e6e57505a0c09a64852
-test fix head: 238da44b4f23e3496f6b283f7e87d86f583879a3
-validated head: 4e555315cbdc187f905c6222c2a8432b3feef077
+phase: routing_fix_awaiting_local_recheck
+routing_test_head: b0c9726830db88500823820994aba0ab0efa5526
+routing_code_head: 13293e9fb2bbd309e0e9ee96929699514f5bdcf9
 package: 0.3.2
 controller protocol: 2
 MCP tools: 6
-Windows scripts/check.ps1: PASS, 91 passed / 0 failed
-real AGY acceptance: PASS
-open findings: none
-Codex UI transcript duplicate check: not_available
+previous Windows scripts/check.ps1: PASS, 91 passed / 0 failed
+previous real AGY payload acceptance: PASS
+new routing Windows check: not_run
+new real Codex routing transcript: not_run
 merge authorized: false
 open PR: #2 (Draft)
 ```
 
-PR：`https://github.com/elio-zwd/agy-worker/pull/2`
+## 为什么重新打开完成门禁
 
-`accepted` 表示规格、实现、远端 review、Windows 全量检查和真实 AGY 行为证据已经完成技术复核；**不代表已合并到 main**。最终集成仍由用户决定。
-
-## 已实现的数据流
+此前 direct MCP probe 已证明 compact payload 生效：submit 148B、running 148–199B、自然 unchanged 100B、terminal 571B，且没有完整 JSON 的 TextContent + structuredContent 双份。随后用户在真实 Codex 会话中发送“你让agy跑一下编译”，实际 transcript 却出现：
 
 ```text
-Codex
-  │
-  │ submit / status / cancel
-  ▼
-compact public envelope
-  - task/status/revision
-  - tiny progress only while nonterminal
-  - summary + exit/counts + evidence ids when terminal
-  - unchanged=true when long-poll timed out without new revision
-  │
-  ├── enough → Codex continues decision-making
-  │
-  └── need evidence
-       ▼
-agy_artifact_read (explicit cold path)
-  - errors
-  - operation-log selected lines
-  - result
-  - image/other evidence
+agy --help
+agy -p "...编译验证..."
 ```
 
-普通 JSON MCP 工具以 `structuredContent` 为 canonical machine result；TextContent 只保留短摘要，不再复制完整 JSON。`agy_artifact_read` 文本/metadata 只发送一份实际 payload；图片继续走 ImageContent。
+这条路径直接绕过 `agy_worker → Controller → Runtime`，所以此前 payload PASS 仍然有效，但不能证明最终“低上下文真实使用”目标已经闭环。
 
-## 最终字节证据
+## 本次修补
 
-首轮真实 `jianyu_lint_assemble`：
+`routing_code_head` 增加三层约束：
 
-```text
-submit:      148B structured / 70B TextContent
-running:     148–199B / 70–71B
-unchanged:   100B / 37B
-terminal:    571B / 67B
-warnings:    19
-errors:      0
-exit_code:   0
-final_status: succeeded
-```
+1. `agy_worker.manage register` 在 Codex `config.toml` 的 `developer_instructions` 中追加一个短小、带 `<AGY_WORKER_ROUTING>` 边界的路由块；保留用户既有指令，重复注册不重复追加，卸载只删除本 Worker 管理的块，标记损坏时 fail-closed。
+2. `agy_worker` / `agy_capabilities` tool description 明确告诉 Codex：用户要求 AGY 执行已支持任务时应走 MCP，不得直接 `agy/agy.exe/agy -p`，MCP 不可用时不得静默回退。
+3. MCP server initialization instructions 同步相同路由边界。
 
-终态没有 stale progress；diagnostics / operation-log / result artifact 均通过单 TextContent drill-down。direct MCP probe 没有出现同一完整 JSON 的 TextContent + structuredContent 双份。Codex UI transcript 本轮不可访问，因此保留 `not_available`，不以 direct probe 冒充 UI 证据。
+不改变 package 0.3.2、Controller protocol 2、六个 MCP 工具、权限、Runtime、payload compact 合同或 AGY 执行语义。
 
-## 最终验证
+## 当前证据边界
 
-首次 Windows/真实 AGY 验收暴露 5 个 pytest 回归。技术复核后确认均是测试契约/fixture 问题，没有要求修改已经通过真实 AGY 验收的生产协议。test-only 修正后，第二轮本地复验在 `4e555315cbdc187f905c6222c2a8432b3feef077` 上得到：
+- 已通过远端 diff/static review：修补相对旧 accepted head 仅涉及 `manage.py`、`server.py`、新增 `tests/test_manage.py`，随后只允许本目录 planning 文档和 `AGENTS.md` 说明更新。
+- 已在 ChatGPT 可执行的 Linux 环境对路由块 install/remove/idempotence 与 TOML round-trip 做最小纯逻辑检查；这不是仓库完整 pytest，也不是 Windows 证据。
+- **尚未执行**当前 routing head 的 Windows `scripts/check.ps1`。
+- **尚未执行**重新注册后的真实 Codex transcript 验收。
 
-```text
-pwsh.exe -NoProfile -File scripts/check.ps1
-exit_code: 0
-pytest: 91 passed / 0 failed / 0 skipped / 0 warnings
-
-git diff --check b51d81701f3cfe3859c485f87e42a03b22b4e3d7..HEAD
-exit_code: 0
-
-working_tree_before: clean
-working_tree_after: clean
-open_findings: none
-```
-
-`c194919..238da44` 的净变化只有三个测试文件；`238da44..4e55531` 只有本目录 planning 文档，所以无需重复消耗 AGY 额度。
-
-## 集成说明
-
-feature branch 历史中包含修测试及最终记录阶段由 ChatGPT 误用 GitHub contents API 产生、随后被正确内容覆盖的临时 `noop/placeholder` 中间提交。最终净 tree 已恢复正确，main 从未被修改，也没有 force-push。若用户选择合并 PR #2，建议使用 **Squash merge**，让 main 只接收一个干净的最终提交。
+因此当前不是 `accepted`。下一步严格按 `LOCAL-ROUTING-RECHECK.md` 由本地 AI 验收；返回证据后再由 ChatGPT 技术复核。
 
 未经用户明确授权，不 merge `main`、不删除 feature branch、不启用 auto-merge、不重写历史。
