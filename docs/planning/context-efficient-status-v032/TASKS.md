@@ -24,6 +24,7 @@ mcp_request_status_code_head: 55f81cc195d9d825b9865f7c412d58b67beef55f
 mcp_schema_generator_head: 1084aad69050ccd05bb02a3ad68b42545bab807e
 mcp_schema_head: e2fd6b85062398cc9de31f0d29a9a9022bc57340
 mcp_request_status_target_head: 094445f4c57663375a725ecae74d236ddaa24567
+latest_docs_head: efc3de9ab4b6df408f0bb93bbe8e2c62b4cefb24
 package: 0.3.2
 controller_protocol: 2
 mcp_tool_count: 6
