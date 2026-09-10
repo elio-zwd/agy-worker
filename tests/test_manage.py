@@ -52,6 +52,20 @@ def test_register_adds_codex_routing_without_overwriting_existing_instructions(m
     assert repeated_instructions.count(manage.CODEX_ROUTING_END) == 1
 
 
+def test_routing_rule_closes_chat_thread_agent_loophole():
+    """“让 AGY 跑一下编译”必须绑定 Worker，而不是被解释成另一个聊天/代理线程。"""
+    instructions = manage.CODEX_ROUTING_BLOCK
+
+    assert "让 AGY 跑一下编译" in instructions
+    assert "只指" in instructions
+    assert "agy_worker" in instructions
+    assert "聊天" in instructions
+    assert "线程" in instructions
+    assert "agent" in instructions
+    assert "subagent" in instructions
+    assert "不得" in instructions
+
+
 def test_unregister_removes_only_managed_routing_and_keeps_user_config(monkeypatch, tmp_path):
     original = "用户自己的全局规则必须原样保留。"
     path = _prepare_config(monkeypatch, tmp_path, developer_instructions=original)
@@ -101,3 +115,6 @@ def test_worker_tool_description_explicitly_prevents_direct_agy_cli_fallback():
     assert "agy.exe" in description
     assert "直接" in description
     assert "不可用" in description
+    assert "聊天" in description
+    assert "线程" in description
+    assert "subagent" in description
