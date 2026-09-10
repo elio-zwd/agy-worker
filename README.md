@@ -16,7 +16,7 @@ v0.3.1 不会自动停止或自动重启 stale Controller。新 Bridge 发现后
 
 ### v0.3.2 低上下文返回状态
 
-`perf/context-efficient-status-v032` 收缩 Codex 默认可见的状态/结果热路径：任务仍完整执行并保存证据，但普通 status 不再重复展开 warning/error 正文和 artifact manifest。当前分支的生产实现已写入，仍需最终 Windows + 真实 AGY 验收；在验收完成前不能把本节描述为正式已验证能力。
+`perf/context-efficient-status-v032` 收缩 Codex 默认可见的状态/结果热路径：任务仍完整执行并保存证据，但普通 status 不再重复展开 warning/error 正文和 artifact manifest，`agy_capabilities` 默认也只返回 workspace/command 路由所需字段。当前分支的生产实现已写入，仍需最终 Windows + 真实 AGY 验收；在验收完成前不能把本节描述为正式已验证能力。
 
 v0.3.2 不改变 Controller protocol v2、六个 MCP 工具、单 Runtime、单执行槽、16 inflight、权限或 request_id 语义。它只改变公开结果视图和 MCP 表示方式，目的是让 AGY 继续承担高噪声工作，而 Codex 默认只接收下一步判断所需信息。
 
@@ -77,18 +77,20 @@ Controller token 的保密性仍依赖本机用户和目录 ACL。`doctor` 在 v
 
 | 工具 | 用途 |
 |---|---|
-| `agy_capabilities` | 查询参数范围、工作区、已登记命令、已知 worktree 和实际安全能力；提交任务前优先调用 |
+| `agy_capabilities` | 仅在 workspace_id 或 command_id 未知时查询紧凑路由表；完整诊断走只读资源 |
 | `agy_worker` | 提交任务，立即返回 task_id、session_id 和状态 |
 | `agy_continue` | 同工作区续轮；必须传 session_id、expected_turn 及完整任务授权 |
-| `agy_status` | 查询或最多等待 25 秒；after_revision 避免重复轮询 |
+| `agy_status` | 查询或最多等待 25 秒；queued/running 优先使用 after_revision + wait_ms=25000 长轮询 |
 | `agy_cancel` | 取消排队/运行任务，可重复调用 |
 | `agy_artifact_read` | 按证据 ID 读取元数据、最多 200 行文本或图片 |
 
-精确字段以 `schemas/*.json` 为准。MCP Resources 同时提供只读的 `agy://capabilities` 和 `agy://workspaces`；资源模板查询返回空列表，不再产生 Method not found。每轮重新授权，续会话不代表继承额外权限。
+已知 `workspace_id` 和 `command_id` 时直接调用 `agy_worker`，不要仅为定位 AGY/MCP 路由而先执行 `git status`、`git branch`、`git log`、`rg AGY` 或 `agy --help`。映射未知时调用一次 `agy_capabilities`；其默认 structured result 只保留 `schema_version` 和每个 workspace 的 `workspace_id`、`registered_path`、`allowed_commands`，存在额外 Git worktree 时再带 `known_worktrees`。完整 limits、Controller、权限和 workspace/worktree 诊断仍保留在 `agy://capabilities` 与 `agy://workspaces` 冷资源中。
+
+精确请求字段以 `schemas/*.json` 为准。MCP Resources 同时提供只读的 `agy://capabilities` 和 `agy://workspaces`；资源模板查询返回空列表，不再产生 Method not found。每轮重新授权，续会话不代表继承额外权限。
 
 ### v0.3.2 紧凑 status / result 合同
 
-调用 `agy_status` 时，推荐把上一次看到的 `revision` 作为 `after_revision`。如果最多等待 25 秒后仍没有更高 revision，且任务尚未进入终态，只返回最小无变化 envelope：
+调用 `agy_status` 时，queued/running 优先把上一次看到的 `revision` 作为 `after_revision`，并使用 `wait_ms=25000` 等待状态变化。如果最多等待 25 秒后仍没有更高 revision，且任务尚未进入终态，只返回最小无变化 envelope：
 
 ```json
 {
@@ -99,7 +101,7 @@ Controller token 的保密性仍依赖本机用户和目录 ACL。`doctor` 在 v
 }
 ```
 
-`unchanged=true` 只表示这个观察窗口里没有新的状态 revision。**它不表示 AGY、Gradle 或其他操作卡死，也不会触发自动取消。** 即使连续多次 unchanged，也应继续等待实际进程终态，除非用户明确取消或既有总超时到达。
+`unchanged=true` 只表示这个观察窗口里没有新的状态 revision。**它不表示 AGY、Gradle 或其他操作卡死，也不会触发自动取消。** 连续 unchanged 时调用方可以直接继续长轮询，不需要每轮先生成面向用户的解释；除非用户明确取消或既有总超时到达，否则仍等待实际进程终态。
 
 终态 status 默认只返回决策摘要，包括 `summary`、真实 operation 退出码、错误/警告计数、termination reason、源码是否变化以及可追溯的 evidence/result artifact ID；不再默认展开 `errors[]`、`warnings[]` 和整份 `artifacts[]` metadata。需要细节时按需读取：
 
