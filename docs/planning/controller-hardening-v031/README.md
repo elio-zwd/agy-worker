@@ -15,13 +15,13 @@
 base: 904b75a6e7b9d0b75c0ae8f63924c3ed0acf5066
 branch: fix/controller-hardening-v031
 validated executable head: b00a5a8853336c345fc186bb9049c44931f19149
-phase: final_acceptance_passed_ready_for_draft_pr
+phase: draft_pr_open_waiting_user_merge_decision
 production code changed: yes
 user approval to start production implementation: approved_2026-09-09
 final Windows acceptance: PASS
 full repository check: 77 passed, 0 failed, 0 skipped, 0 warnings
 remote spec/code-quality review: no open Critical/Important
-open PR: pending Draft creation
+open PR: #1 (Draft)
 merge authorized: false
 ```
 
@@ -29,7 +29,7 @@ merge authorized: false
 
 第二次完整 Windows Final Acceptance 在精确代码/测试 HEAD `b00a5a8853336c345fc186bb9049c44931f19149` 上执行并返回 PASS：`scripts/check.ps1` exit 0、77/77 pytest，通过真实 WMI ownership、fresh 双 Bridge lifecycle、custom-config no-leak / pre-existing preservation / `--keep-controller`、ACL advisory 和两个 `git diff --check`。
 
-后续 `TASKS.md` / `docs/部署验收.md` 等提交只记录验收状态，不修改生产代码、测试、脚本或依赖。执行证据仍明确绑定 `b00a5a8...`，不能说文档记录提交之后又重新执行过 Windows 测试。
+后续 `TASKS.md` / `docs/部署验收.md` 等提交只记录验收状态和 Draft PR 元数据，不修改生产代码、测试、脚本或依赖。执行证据仍明确绑定 `b00a5a8...`，不能说文档记录提交之后又重新执行过 Windows 测试。
 
 ## 最终审查结论
 
@@ -103,11 +103,10 @@ Git integrity:
 
 ```text
 第二次完整 Final Acceptance PASS
-→ ChatGPT receiving-code-review 技术复核 PASS 证据
-→ TASKS.md / docs/部署验收.md 回填真实结果
-→ verification-before-completion 核对证据边界
-→ 创建 Draft PR
-→ 保留 feature branch
+→ ChatGPT receiving-code-review 技术复核 PASS
+→ 验收记录已回填
+→ Draft PR #1 已创建
+→ 保留 feature branch 处理 review
 → 不 merge；最终 merge 由用户决定
 ```
 
