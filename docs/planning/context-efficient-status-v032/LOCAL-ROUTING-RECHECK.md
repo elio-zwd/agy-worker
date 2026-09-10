@@ -8,57 +8,56 @@
 repository: elio-zwd/agy-worker
 branch: perf/context-efficient-status-v032
 base: b51d81701f3cfe3859c485f87e42a03b22b4e3d7
-ROUTING_TEST_HEAD: b0c9726830db88500823820994aba0ab0efa5526
-ROUTING_INITIAL_CODE_HEAD: 13293e9fb2bbd309e0e9ee96929699514f5bdcf9
-ROUTING_FIX_HEAD: be29e8c78836deed4ccf88864cace5e1fc5dc7c2
+PREVIOUS_WINDOWS_PASS_HEAD: 87fb3ddd34c595c0b1be78db1a446711b994895f
+CHAT_THREAD_RED_HEAD: d73d6a4646f7d1cb4818f93a18ea74f31a2fd698
+CHAT_THREAD_FIX_HEAD: 73a2015c04dc84ad0d755cfe4831fb84fe4b6e17
+ROUTING_UPGRADE_RED_HEAD: 365da956791f562d2989286e363e855eeb94a2e6
+ROUTING_TARGET_HEAD: 31119240a5d5388b17f3f0d724644a479ec77b21
 package: 0.3.2
 controller protocol: 2
 MCP tools: 6
 ```
 
-`ROUTING_FIX_HEAD` 是当前待验收生产代码。它之后只允许 `AGENTS.md` 和 `docs/planning/context-efficient-status-v032/**` 的说明/验收文件变化。如果出现其他源码、测试、脚本、配置或依赖变化，停止并报告。
+`ROUTING_TARGET_HEAD` 是当前待验收代码。它之后只允许 `docs/planning/context-efficient-status-v032/**` 的验收/状态文档变化；若出现新的 `src/`、`tests/`、scripts、config、依赖或其他生产变化，停止并报告。
 
-### 已知前一轮失败（不要重复当作当前结果）
+## 1. 已知历史证据
 
-在旧 HEAD `c28713f09856331339968a7b5c4856b3e2b9ca6c` 上，本地权威检查真实得到：
+旧 HEAD `87fb3ddd34c595c0b1be78db1a446711b994895f` 已真实通过：
 
 ```text
-scripts/check.ps1 exit: 1
-pytest: 95 passed / 1 failed / 0 skipped / 0 warnings
-failed: tests/test_manage.py::test_register_adds_codex_routing_without_overwriting_existing_instructions
-reason: 生产文案为“不得用 shell/terminal 直接调用”，测试要求连续子串“不可直接”或“不得直接”
+scripts/check.ps1: exit 0
+pytest: 96 passed / 0 failed / 0 skipped / 0 warnings
+working_tree before/after: clean
 ```
 
-ChatGPT 技术复核后确认路由语义本身已禁止 direct CLI，但测试合同要求更明确连续措辞。`ROUTING_FIX_HEAD` 只把生产指令改为“不得直接用 shell/terminal 调用”，相对旧 HEAD 仅 `src/agy_worker/manage.py` 一行替换。当前 HEAD 必须重新执行完整检查，不能沿用旧结果。
+但同一版本的真实 Codex 请求“让 AGY 跑一下编译”仍错误走了聊天/代理线程，出现“已列出聊天 / 已向聊天发送消息 / wait threads / 已读取聊天”。所以该版本**不是端到端 PASS**。
 
-## 1. 安全前置
+当前修补把 `AGY/agy` 在 Worker 支持任务中的含义唯一绑定为本机 `agy_worker` MCP，并显式排除 chat/thread/agent/subagent。随后又修复了一个升级问题：机器上若已经注册旧 `<AGY_WORKER_ROUTING>` block，新 `register.ps1` 应原位升级该 managed block，而不是因正文不同报冲突；用户自己的前置 `developer_instructions` 必须保留。
 
-在 `D:\My\_Elio\agy-worker`：
+## 2. 安全前置与当前 HEAD
 
 ```powershell
 Set-Location 'D:\My\_Elio\agy-worker'
 git status --short
 ```
 
-若非空，不 stash/reset/clean 覆盖用户内容，停止并报告。
-
-然后：
+若非空，不 stash/reset/clean，停止并报告。
 
 ```powershell
 git fetch origin
 git switch perf/context-efficient-status-v032
 git pull --ff-only origin perf/context-efficient-status-v032
 $Head = (git rev-parse HEAD).Trim()
-$RoutingFix = 'be29e8c78836deed4ccf88864cace5e1fc5dc7c2'
-git merge-base --is-ancestor $RoutingFix HEAD
-Write-Host "routing_fix_is_ancestor exit=$LASTEXITCODE"
-git diff --name-only "$RoutingFix..HEAD"
+$Target = '31119240a5d5388b17f3f0d724644a479ec77b21'
+git merge-base --is-ancestor $Target HEAD
+Write-Host "routing_target_is_ancestor exit=$LASTEXITCODE"
+git diff --name-only "$Target..HEAD"
 git status --short
 ```
 
-要求 ancestor exit `0`，且 target 之后只能有上述允许的文档路径。
+要求 ancestor exit `0`，且 target 之后只有本 planning 目录文档变化。
 
-## 2. 当前 HEAD 的权威测试
+## 3. 当前 HEAD 权威回归
 
 ```powershell
 pwsh.exe -NoProfile -File scripts/check.ps1
@@ -70,11 +69,26 @@ $DiffExit = $LASTEXITCODE
 Write-Host "git diff --check exit=$DiffExit"
 ```
 
-原样记录：exit code、pytest passed/failed/skipped/warnings、compileall 结果和全部失败。前一轮旧 HEAD 是 `95 passed / 1 failed`；当前验收必须实际得到 exit `0` 和 `0 failed` 才能进入后续真实 Codex 路由验证。
+记录真实 exit code、passed/failed/skipped/warnings、compileall。必须 `scripts/check.ps1 exit 0`、`0 failed`、`git diff --check exit 0`。不要用历史 96 passed 推断当前结果。
 
-## 3. 注册当前路由规则
+## 4. 验证旧 managed block 可安全升级
 
-这是 agy-worker 自身维护操作，因此允许 `scripts/register.ps1` 内部调用 AGY CLI：
+不要输出整个 `~/.codex/config.toml`。注册前先只读报告：
+
+```powershell
+@'
+from pathlib import Path
+import tomllib
+p=Path.home()/'.codex'/'config.toml'
+d=tomllib.loads(p.read_text('utf-8'))
+s=d.get('developer_instructions','')
+print('before_begin_count=',s.count('<AGY_WORKER_ROUTING>'))
+print('before_end_count=',s.count('</AGY_WORKER_ROUTING>'))
+print('before_chat_thread_binding=',all(x in s for x in ['只指本机','聊天','线程','subagent']))
+'@ | .venv\Scripts\python.exe -
+```
+
+然后执行当前注册：
 
 ```powershell
 pwsh.exe -NoProfile -File scripts/register.ps1
@@ -82,53 +96,56 @@ $RegisterExit = $LASTEXITCODE
 Write-Host "register exit=$RegisterExit"
 ```
 
-不要输出整个 `~/.codex/config.toml`，避免泄露其他配置。用只读脚本只报告布尔值/计数：
+再只读检查：
 
 ```powershell
 @'
 from pathlib import Path
 import tomllib
-p = Path.home()/'.codex'/'config.toml'
-d = tomllib.loads(p.read_text('utf-8'))
-s = d.get('developer_instructions','')
-print('routing_begin_count=', s.count('<AGY_WORKER_ROUTING>'))
-print('routing_end_count=', s.count('</AGY_WORKER_ROUTING>'))
-print('worker_rule_present=', 'agy_worker' in s and 'agy.exe' in s)
-print('direct_cli_prohibition_present=', '不得直接' in s or '不可直接' in s)
-print('mcp_registered=', 'agy_worker' in d.get('mcp_servers',{}))
+p=Path.home()/'.codex'/'config.toml'
+d=tomllib.loads(p.read_text('utf-8'))
+s=d.get('developer_instructions','')
+print('after_begin_count=',s.count('<AGY_WORKER_ROUTING>'))
+print('after_end_count=',s.count('</AGY_WORKER_ROUTING>'))
+print('worker_rule_present=','agy_worker' in s and 'agy.exe' in s)
+print('chat_thread_binding=',all(x in s for x in ['只指本机','聊天','线程','agent','subagent','让 AGY 跑一下编译']))
+print('direct_cli_prohibition=',('不得直接' in s) and ('agy -p' in s))
+print('mcp_registered=','agy_worker' in d.get('mcp_servers',{}))
 '@ | .venv\Scripts\python.exe -
 ```
 
-要求 begin/end 均为 `1`，`worker_rule_present=True`，`direct_cli_prohibition_present=True`，`mcp_registered=True`。再次执行 `scripts/register.ps1` 后重复检查，计数仍必须为 `1`，证明真实配置幂等。
+要求 `register exit=0`、begin/end 各 `1`、其余布尔值均 True。再次执行 `scripts/register.ps1` 并重复 after 检查，begin/end 仍必须各 `1`，证明升级后重复注册幂等。
 
-## 4. 真实 Codex 行为复验
+> 若注册阶段出现“路由指令标记冲突或损坏”，不要手工改 `config.toml`，直接返回原始错误给 ChatGPT。
 
-注册完成后**新开一个 Codex 会话**，避免旧 session 已经加载旧 config。进入此前实际使用 AGY 编译的业务项目，用与失败时相同或等价的自然语言：
+## 5. 新 Codex 会话真实行为
+
+注册成功后**关闭旧测试会话并新开 Codex 会话**，进入此前实际业务项目。只发送：
 
 ```text
-你让agy跑一下编译
+让 AGY 跑一下编译
 ```
 
-保存 Codex 可见 transcript。不要指导 Codex“一定要用 MCP”；这一步要验证自然语言路由本身。
+不要额外提示“用 MCP”，因为这里验证的是自然语言路由。
 
 ### PASS 条件
 
 必须同时满足：
 
-1. Codex 使用 `agy_worker` MCP 链路；允许先调用 `agy_capabilities`，随后应看到 `agy_worker`、`agy_status`，需要诊断时才按需 `agy_artifact_read`。
-2. transcript **不得**出现正常业务路径下的 `agy --help`、`agy -p ...`、直接 `agy.exe ...` 或其他 shell/terminal AGY CLI fallback。
-3. 如果 MCP 不可用，Codex 应明确报告不可用并停止，不得自动转为 direct CLI。
-4. 编译成功/失败结论必须来自 Worker terminal 的真实 operation 状态/exit code；AGY 自述成功不能替代进程证据。
-5. 成功时不应无条件读取 diagnostics/result/operation-log 全量冷证据；只有实际需要细节时才 drill-down。
+1. `AGY` 被解释为 `agy_worker` MCP，而不是聊天/线程/agent/subagent。
+2. 允许 `agy_capabilities`（必要时），随后应是 `agy_worker` → `agy_status(after_revision=...)`；需要失败细节时才按需 `agy_artifact_read`。
+3. transcript 中不得出现为寻找 AGY 而进行的“列出聊天 / 读取聊天 / 向聊天发送消息 / wait threads / spawn 或等待 subagent”等路线。
+4. transcript 中不得出现 `agy --help`、`agy -p`、direct `agy.exe` 等 shell/terminal fallback。
+5. 编译成功/失败以 Worker terminal operation/exit code 为依据；成功路径不应无条件读取完整 diagnostics/result/operation-log。
 
-若 UI 显示 context/token 使用量，记录本次请求前和完成后的数值作为补充比较。UI 折叠不视为“未进入上下文”的证据；主要判据仍是 tool transcript 与 Worker compact 返回。
+若 UI 显示 context/token 数值，可记录请求前后变化，但只作为补充指标；主要证据是工具 transcript 和 Worker compact terminal result。
 
-## 5. 返回 ChatGPT 的报告模板
+## 6. 返回 ChatGPT 的报告模板
 
 ```text
 branch_head:
-routing_fix_is_ancestor:
-post_routing_fix_changed_files:
+routing_target_is_ancestor:
+post_target_changed_files:
 working_tree_before:
 
 scripts_check_exit:
@@ -139,18 +156,27 @@ pytest_warnings:
 compileall:
 git_diff_check_exit:
 
-register_exit:
-routing_begin_count_first:
-routing_end_count_first:
-routing_begin_count_second:
-routing_end_count_second:
+before_begin_count:
+before_end_count:
+before_chat_thread_binding:
+register_exit_first:
+after_begin_count_first:
+after_end_count_first:
 worker_rule_present:
-direct_cli_prohibition_present:
+chat_thread_binding:
+direct_cli_prohibition:
 mcp_registered:
+register_exit_second:
+after_begin_count_second:
+after_end_count_second:
 
 new_codex_session: yes/no
 natural_language_request:
 observed_tools_in_order:
+chat_list_read_seen: yes/no
+chat_send_seen: yes/no
+thread_wait_seen: yes/no
+subagent_route_seen: yes/no
 direct_agy_help_seen: yes/no
 direct_agy_p_seen: yes/no
 direct_agy_exe_seen: yes/no
@@ -165,4 +191,4 @@ open_findings:
 overall_recheck: PASS/FAIL
 ```
 
-不要自行修改失败项。把 transcript 中与路由、错误、exit code 有关的原文一并返回 ChatGPT，由远端主开发 AI 复核。
+本地 AI 只验收，不修代码。失败时保留 transcript、命令输出和 exit code，交回 ChatGPT 技术复核。
