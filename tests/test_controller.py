@@ -415,6 +415,12 @@ def test_launch_retry_after_first_child_never_becomes_healthy(tmp_path, monkeypa
         return 41002
 
     monkeypatch.setattr(ControllerClient, "_launch", fake_launch)
+    monkeypatch.setattr(
+        ControllerClient,
+        "_process_is_alive",
+        staticmethod(lambda _pid: False),
+        raising=False,
+    )
     client = ControllerClient(config, startup_timeout=2)
     try:
         assert len(launch_times) == 2
@@ -424,6 +430,40 @@ def test_launch_retry_after_first_child_never_becomes_healthy(tmp_path, monkeypa
         ControllerClient.stop_existing(config, timeout=3)
         for thread in controller_threads:
             thread.join(timeout=3)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="需要 Windows msvcrt 文件锁")
+def test_simultaneous_clients_do_not_duplicate_live_pending_launch(tmp_path, monkeypatch):
+    """首个 WMI 子进程仍存活且尚未发布 health 时，其他 client 不得重复 launch。"""
+    config = make_config(tmp_path)
+    ready_at = time.monotonic() + 0.8
+    fake_state = {"pid": 41001, "instance_id": "a" * 32}
+    launches = []
+    launches_lock = threading.Lock()
+
+    def fake_read_state(_self):
+        return fake_state if time.monotonic() >= ready_at else None
+
+    def fake_launch(_self):
+        with launches_lock:
+            pid = 41001 + len(launches)
+            launches.append(pid)
+            return pid
+
+    monkeypatch.setattr(ControllerClient, "_read_state", fake_read_state)
+    monkeypatch.setattr(ControllerClient, "_healthy", lambda _self, state: state is not None)
+    monkeypatch.setattr(
+        ControllerClient,
+        "_process_is_alive",
+        staticmethod(lambda _pid: True),
+        raising=False,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        clients = list(pool.map(lambda _: ControllerClient(config, startup_timeout=2), range(2)))
+
+    assert len(clients) == 2
+    assert launches == [41001]
 
 
 def test_windows_wmi_launch_returns_created_pid(tmp_path, monkeypatch):
