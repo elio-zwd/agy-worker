@@ -18,7 +18,7 @@ v0.3.1 不会自动停止或自动重启 stale Controller。新 Bridge 发现后
 
 `perf/context-efficient-status-v032` 收缩 Codex 默认可见的请求、状态与结果热路径：任务仍完整执行并保存证据，普通 status 不重复展开 warning/error 正文和 artifact manifest，`agy_capabilities` 默认只返回 workspace/command 路由字段；`agy_worker/agy_continue` 的公开输入也不再展示当前不可用的 shell/code_write 或无需模型调整的 artifact/summary 字节预算。当前分支的新一轮修补仍需 Windows + 真实 Codex 复验；在验收完成前不能把本节描述为正式已验证能力。
 
-v0.3.2 不改变 Controller protocol v2、六个 MCP 工具、单 Runtime、单执行槽、16 inflight、Runtime 权限执行边界或 request_id 语义。Runtime 仍保存完整 progress/revision；MCP server 只在单次 status 等待预算内合并中间 progress/unchanged revision，减少 Codex tool round-trip。
+v0.3.2 不改变 Controller protocol v2、六个 MCP 工具、单 Runtime、单执行槽、16 inflight、Runtime 权限执行边界或 request_id 语义。Runtime 仍保存完整 progress/revision；MCP server 在一次 status 总等待预算内合并中间 progress/unchanged revision。公开 `agy_status` 默认等待 50 秒，Codex 可按预计任务耗时自主选择 50～600 秒；MCP 内部仍把该总预算切成最多 25 秒的 Controller long-poll，任务提前进入终态时立即返回，从而减少 Codex tool round-trip。
 
 ## 当前可用范围
 
@@ -45,7 +45,7 @@ pwsh.exe -NoProfile -File scripts/check.ps1
 pwsh.exe -NoProfile -File scripts/register.ps1
 ```
 
-`register.ps1` 登记 AGY 私有 Broker 及 Codex 的 `agy_worker`，保留其他 MCP。Codex 原配置备份在 `work/backups`，这些备份可能包含敏感配置，请勿提交。重新安装使用 `scripts/install.ps1 -Python <Python完整路径>`，依赖锁定在 `requirements.lock` 和 `vendor/browser/package-lock.json`。
+`register.ps1` 登记 AGY 私有 Broker 及 Codex 的 `agy_worker`，保留其他 MCP，并把 Codex 对该 MCP 的宿主 `tool_timeout_sec` 设为 660 秒，以覆盖合法的最长 600 秒 `agy_status` 等待；660 秒只是宿主调用上限，不会让每次调用固定等待这么久。升级到本轮代码后需重新执行注册入口使该配置生效。Codex 原配置备份在 `work/backups`，这些备份可能包含敏感配置，请勿提交。重新安装使用 `scripts/install.ps1 -Python <Python完整路径>`，依赖锁定在 `requirements.lock` 和 `vendor/browser/package-lock.json`。
 
 同一数据目录仍只允许一个 Runtime，但可以同时存在多个 stdio Bridge。Controller 继续只有 1 个执行槽；v0.3.1 最多接受 16 个排队或运行中的 inflight 任务，第 17 个新的逻辑请求返回 `worker_busy`。同 `request_id`、同 fingerprint 的幂等重试在容量已满时仍返回原 task；queued Future 若尚未开始执行，`agy_cancel` 会直接进入 `cancelled`，无需等待前面的任务释放执行槽。
 
@@ -80,7 +80,7 @@ Controller token 的保密性仍依赖本机用户和目录 ACL。`doctor` 在 v
 | `agy_capabilities` | 仅在 workspace_id 或 command_id 未知时查询紧凑路由表；完整诊断走只读资源 |
 | `agy_worker` | 提交任务，立即返回 task_id、session_id 和状态 |
 | `agy_continue` | 同工作区续轮；必须传 session_id、expected_turn 及本轮公开权限 |
-| `agy_status` | 查询或最多等待 25 秒；单次调用在该总预算内合并中间 progress/unchanged revision |
+| `agy_status` | 无 `after_revision` 时立即读取当前快照；有 revision 时默认最多等待 50 秒，也可由 Codex 选择 50～600 秒总预算；终态提前返回 |
 | `agy_cancel` | 取消排队/运行任务，可重复调用 |
 | `agy_artifact_read` | 按证据 ID 读取元数据、最多 200 行文本或图片 |
 
@@ -90,7 +90,9 @@ Controller token 的保密性仍依赖本机用户和目录 ACL。`doctor` 在 v
 
 ### v0.3.2 紧凑 status / result 合同
 
-调用 `agy_status` 时，queued/running 把上一次看到的 `revision` 作为 `after_revision`，并使用 `wait_ms=25000`。Runtime 内部可能因为 `captured_bytes/progress` 变化产生多个 revision；MCP server 会在**同一 25 秒总等待预算**内继续观察并合并这些中间 revision，优先把 terminal 或等待窗口结束时的单个观察点返回给 Codex。中间 revision 不会把总等待预算重置为新的 25 秒。
+第一次只知道 `task_id`、还没有可作为变化基线的 revision 时，调用 `agy_status` 可省略 `after_revision`；MCP 会把这次请求转换为内部 `wait_ms=0`，立即取得当前快照。之后 queued/running 状态把上一次看到的 `revision` 作为 `after_revision`。公开 `wait_ms` 省略时总等待预算为 50000ms；Codex 可根据任务预计耗时显式选择 50000～600000ms。这个值是**最多等待预算，不是固定 sleep**：AGY 在窗口内提前进入 terminal 时，本次 MCP 调用立即返回。
+
+Runtime 内部仍可能因为 `captured_bytes/progress` 变化产生多个 revision。MCP server 在同一个公开总等待预算内持续观察并合并这些中间 revision，每次传给 Controller/Runtime 的内部 long-poll 仍不超过 25000ms，server→Controller 的单次 HTTP timeout 仍为 30 秒。中间 revision 不会重置公开总等待 deadline；例如 Codex 选择 120 秒，不会因为每个 progress revision 再获得新的 120 秒。
 
 如果等待窗口结束时仍没有新的可交付观察点且任务非终态，可返回最小无变化 envelope：
 
@@ -127,7 +129,7 @@ req-<uuid4hex>
 
 `workspace_id` 是 `agy_capabilities` 返回的登记别名，不是文件路径。对于任何已登记 Git 仓库，可通过额外的 `workspace_path` 指向该仓库由 Git 正式登记的主工作树或分离 worktree。Runtime 会校验 worktree 根目录、Git common-dir 和 `git worktree list`；其他仓库、普通目录、仓库子目录及不存在路径都会拒绝。续会话绑定首次使用的实际路径，不能中途换 worktree。
 
-普通 MCP 一般完全省略 `limits`；只有任务确实需要超过默认 300 秒时才设置 `total_timeout_sec`。完整内部限制和默认值可通过冷资源 `agy://capabilities` 查看，但 `summary_max_bytes`、`artifact_max_bytes` 不再是普通 MCP 的可调输入。Codex MCP 注册的外层 `tool_timeout_sec` 为 60 秒；Controller status 单次 HTTP timeout 仍为 30 秒。若 Controller status 首次因 `controller_unavailable` 重连，既有 client 重连逻辑仍会把重试 `wait_ms` 置 0，避免重复消耗长等待预算。
+普通 MCP 一般完全省略 `limits`；只有任务确实需要超过默认 300 秒时才设置 `total_timeout_sec`。完整内部限制和默认值可通过冷资源 `agy://capabilities` 查看，但 `summary_max_bytes`、`artifact_max_bytes` 不再是普通 MCP 的可调输入。Codex MCP 注册的外层 `tool_timeout_sec` 为 660 秒，用于覆盖 `agy_status` 最长 600 秒公开等待预算；Controller status 单次 HTTP timeout 仍为 30 秒，内部单段 long-poll 仍最多 25 秒。若 Controller status 首次因 `controller_unavailable` 重连，既有 client 重连逻辑仍会把重试 `wait_ms` 置 0，避免重复消耗长等待预算。
 
 编译真实项目示例：
 
