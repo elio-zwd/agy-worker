@@ -19,11 +19,13 @@
 ## 当前总状态
 
 ```text
-phase: planning_pr_preparation
+phase: draft_pr_open_waiting_implementation_authorization
 base: b51d81701f3cfe3859c485f87e42a03b22b4e3d7
 branch: perf/context-efficient-status-v032
 planning_spec_commit: 98f6171359088b8bb90e424ef93a2b33361cf4a5
 planning_plan_commit: bae7ff5fb1e231e62701eebfb291a41a1bb10c3a
+planning_tasks_commit: 48196024f4f6c92b69e112a2c6eb7da0fa1da63e
+planning_pr_initial_head: d26729b3f084321693f0b131f4008231395d06ec
 production_code_changed: false
 package_target: 0.3.2
 controller_protocol_target: 2
@@ -32,8 +34,10 @@ implementation_authorized: false
 real_implementation_tests_run: false
 real_agy_v032_acceptance: not_run
 merge_authorized: false
-open_pr: pending_creation
+open_pr: "#2_draft"
 ```
+
+PR：`https://github.com/elio-zwd/agy-worker/pull/2`
 
 `implementation_authorized=false` 的含义是：用户本轮明确要求分析并创建 PR/PLAN/TASKS，因此规划文档可以提交；但本轮没有要求立即修改生产代码。后续只有在用户明确说开始开发/实施后，才按 `PLAN.md` 进入 T1。
 
