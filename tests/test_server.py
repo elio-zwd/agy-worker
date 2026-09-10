@@ -80,11 +80,14 @@ def test_compact_status_text_exposes_unchanged_and_terminal_summary():
         'result':{'summary':'操作成功，日志采集完成。','warnings':['不应进入文本'],'artifacts':[{'artifact_id':'x'}]},
     })
 
-    assert unchanged=='agy_status: running rev=5；无变化'
+    assert 'running rev=5' in unchanged
+    assert '继续轮询' in unchanged
+    assert '无需用户消息' in unchanged
     assert 'succeeded rev=35' in terminal
     assert '操作成功，日志采集完成。' in terminal
     assert 'warnings' not in terminal
     assert 'artifacts' not in terminal
+    assert len(unchanged.encode('utf-8'))<=256
     assert len(terminal.encode('utf-8'))<=256
 
 
