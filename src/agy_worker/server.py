@@ -92,12 +92,15 @@ async def _coalesced_status(client, model):
 
     deadline=time.monotonic()+wait_ms/1000
     current_revision=after_revision
-    latest=None
     while True:
         remaining=deadline-time.monotonic()
         if remaining<=0:
-            return latest if latest is not None else await asyncio.to_thread(
-                client.call,"status",{**params,"wait_ms":0},timeout=30
+            # 最后一个 long-poll 返回后可能恰好跨过 deadline；再取一次即时快照，
+            # 避免把刚刚已经 terminal 的任务以旧 running/unchanged 返回给 Codex。
+            return await asyncio.to_thread(
+                client.call,"status",{
+                    **params,"after_revision":current_revision,"wait_ms":0,
+                },timeout=30
             )
         poll_params={
             **params,
@@ -106,7 +109,6 @@ async def _coalesced_status(client, model):
             "wait_ms":max(1,min(25000,int(remaining*1000))),
         }
         result=await asyncio.to_thread(client.call,"status",poll_params,timeout=30)
-        latest=result
         if not isinstance(result,dict) or result.get("status") in TERMINAL_STATUSES:
             return result
         revision=result.get("revision")
