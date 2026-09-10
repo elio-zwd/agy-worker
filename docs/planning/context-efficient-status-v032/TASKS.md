@@ -31,8 +31,11 @@ adaptive_wait_server_head: ed7cb63879ab436dfa5b80dc23ddc0bd095876d6
 adaptive_wait_schema_generator_head: 0c46fe6daf279e1f287a6fc5e3590bca439f4e8e
 adaptive_wait_schema_head: d8bf2521e673912e7d4fde0480927f84d3c595c6
 adaptive_wait_host_timeout_test_head: d51676ae126f3c938865e0c03738a3523df0f937
-adaptive_wait_production_target_head: 36d820aac4786eafdfb047a08e8fe038392f63d9
-latest_docs_before_tracker_head: 3faa296aa79c0df56f09826c39533fe039bd3735
+adaptive_wait_host_timeout_head: 36d820aac4786eafdfb047a08e8fe038392f63d9
+adaptive_wait_deadline_red_head: f17b00cb026d0194b3a19663e860c5970952653d
+adaptive_wait_deadline_fix_head: 02201bd5b779117fb9e04c808b36e95ea80996be
+adaptive_wait_production_target_head: 02201bd5b779117fb9e04c808b36e95ea80996be
+latest_docs_before_tracker_head: 3c17ecc86b5bd2f6819c089de900ccb3b96e3bc0
 package: 0.3.2
 controller_protocol: 2
 mcp_tool_count: 6
@@ -115,14 +118,15 @@ push/webhook/task-subscription: not implemented
 - [x] T41 MCP 外部/内部 status 模型：`a143fe9...` 新增 `McpStatusRequest(wait_ms=50000, 50000..600000)`；内部 `StatusRequest` 保持 0..25000。
 - [x] T42 Server 自适应 coalescing：`ed7cb63...` 让 `agy_status` 对外使用 `McpStatusRequest`；无 `after_revision` 转内部即时 `wait_ms=0`；已有 revision 时使用公开总 deadline 并按 <=25000ms 内部分片；terminal 立即返回；server instructions 不再固定要求 25000。
 - [x] T43 Schema generator 与 tracked schema：`0c46fe6...` 让 `manage schemas` 使用 `McpStatusRequest`；`d8bf252...` 同步 `schemas/agy_status.json` 为 default 50000/min 50000/max 600000。
-- [x] T44 Codex 宿主 timeout 测试与实现：`d51676a...` 先增加 `tool_timeout_sec > 600` 回归约束；`36d820a...` 把 `manage.register()` 的本 Worker `tool_timeout_sec` 从 60 提高到 660。**新的生产代码+测试+公开 schema target：`36d820aac4786eafdfb047a08e8fe038392f63d9`。**
-- [x] T45 文档/验收同步：README、`docs/实施设计.md`、SPEC、ADAPTIVE plan、`LOCAL-ROUTING-RECHECK.md` 已更新为 50～600 秒公开合同、<=25 秒内部分片、660 秒宿主上限、非 push 语义和重新注册要求。
-- [ ] T46 当前 target Windows 全量回归：`scripts/check.ps1` exit 0、0 failed；`git diff --check` exit 0。必须记录新鲜 passed/failed/skipped/warnings 与 compileall；旧 102 passed 不能替代。
-- [ ] T47 Schema/注册实机复核：真实 `list_tools` 的 `agy_status.wait_ms` 为 default 50000/min50000/max600000；非法 49999/600001 在 Controller 前拒绝；`manage schemas` 无 tracked diff；重新运行 `scripts/register.ps1` 后 Codex config 的 `tool_timeout_sec=660` 且用户 instructions/其他 MCP 保留。
-- [ ] T48 真实 Codex 第一提交复核：只发“使用AGY跑编译测试”，`agy_worker` 第一调用即成功提交，不出现 shell/artifact/summary 隐藏字段重试，无 discovery shell/direct CLI/chat-thread。
-- [ ] T49 自适应 status 实机复核：第一次无 revision status 为即时快照；后续 `after_revision` + 省略默认 50 秒或自主 50～600 秒；Controller/internal probe 若可见，每段 <=25000ms；progress revision 不逐个回 Codex；deadline 不因 revision 重置。
-- [ ] T50 terminal 提前返回与原会话闭环：较长预算下 AGY terminal 后 tool call 应提前返回而非睡满预算；两次 status 之间无用户等待叙述；同一 Codex 会话继续到 Worker terminal。若场景未自然观察到必须写 `not_observed`，不能伪造。
-- [ ] T51 ChatGPT 收到本地证据后执行 `receiving-code-review` + `verification-before-completion`；全部门禁满足后才恢复 `accepted`。
+- [x] T44 Codex 宿主 timeout 测试与实现：`d51676a...` 先增加 `tool_timeout_sec > 600` 回归约束；`36d820a...` 把 `manage.register()` 的本 Worker `tool_timeout_sec` 从 60 提高到 660。
+- [x] T45 第一轮规格审查发现 deadline 边界竞态：计划要求 deadline 到达后做最终即时快照，而初版实现会在已有 `latest` 时直接返回旧 running/unchanged。`f17b00c...` 先添加边界回归；`02201bd...` 修改 server，在 deadline 到达时使用当前 revision 做内部 `wait_ms=0` 最终快照，不重新开启等待窗口。**ChatGPT Web 未执行该 RED/GREEN 测试。**
+- [x] T46 文档/验收同步：README、`docs/实施设计.md`、SPEC、ADAPTIVE plan、`LOCAL-ROUTING-RECHECK.md` 已更新为 50～600 秒公开合同、<=25 秒内部分片、deadline 最终快照、660 秒宿主上限、非 push 语义和重新注册要求。**最终生产代码+测试+公开 schema target：`02201bd5b779117fb9e04c808b36e95ea80996be`。**
+- [ ] T47 当前 target Windows 全量回归：`scripts/check.ps1` exit 0、0 failed；`git diff --check` exit 0。必须记录新鲜 passed/failed/skipped/warnings 与 compileall；旧 102 passed 不能替代。
+- [ ] T48 Schema/注册实机复核：真实 `list_tools` 的 `agy_status.wait_ms` 为 default 50000/min50000/max600000；非法 49999/600001 在 Controller 前拒绝；`manage schemas` 无 tracked diff；重新运行 `scripts/register.ps1` 后 Codex config 的 `tool_timeout_sec=660` 且用户 instructions/其他 MCP 保留。
+- [ ] T49 真实 Codex 第一提交复核：只发“使用AGY跑编译测试”，`agy_worker` 第一调用即成功提交，不出现 shell/artifact/summary 隐藏字段重试，无 discovery shell/direct CLI/chat-thread。
+- [ ] T50 自适应 status 实机复核：第一次无 revision status 为即时快照；后续 `after_revision` + 省略默认 50 秒或自主 50～600 秒；Controller/internal probe 若可见，每段 <=25000ms；progress revision 不逐个回 Codex；deadline 不因 revision 重置；deadline 到达时最终即时快照不返回 stale running。
+- [ ] T51 terminal 提前返回与原会话闭环：较长预算下 AGY terminal 后 tool call 应提前返回而非睡满预算；两次 status 之间无用户等待叙述；同一 Codex 会话继续到 Worker terminal。若场景未自然观察到必须写 `not_observed`，不能伪造。
+- [ ] T52 ChatGPT 收到本地证据后执行 `receiving-code-review` + `verification-before-completion`；全部门禁满足后才恢复 `accepted`。
 
 ## 设计取舍
 
@@ -132,13 +136,15 @@ push/webhook/task-subscription: not implemented
 
 status 则反向做“公开总预算 / 内部单段预算”分层：Codex 面向任务预计耗时选择 50～600 秒，一次 MCP 调用内部仍只使用 <=25 秒 Controller long-poll。这样保留 Runtime 完整 progress/revision 审计，不需要通过节流或删除进度事实来减少模型轮询。
 
+总 deadline 到达后额外一次内部 `wait_ms=0` 最终快照只用于消除截止点 stale-result 竞态，不延长公开等待预算；若任务已 terminal 可立即把终态交回 Codex。
+
 `tool_timeout_sec=660` 只扩大 Codex 宿主允许该 MCP 调用存活的上限，不改变 AGY 任务 `total_timeout_sec`、公开 status 最大 600 秒、Controller HTTP timeout 30 秒、内部 status 最大 25 秒、权限或协议。
 
 本轮不实现 webhook、server-initiated push 或 MCP Tasks subscription。若未来确认 Codex 宿主支持可靠的 task notification → model continuation，需要作为独立设计重新评估，不能把当前挂起 tool call 伪装成 push。
 
 ## 保留的已验证事实
 
-`b34e...` 已真实验证：hot capabilities 700B、冷资源完整、没有 pre-MCP shell/direct CLI/chat-thread 路由；真实 `jianyu_compile_test` 最终 succeeded/exit 0。**这些证据不能替代 `36d820a...` 自适应 status、MCP schema 与 660 秒注册配置的 Windows/真实 Codex 复验。**
+`b34e...` 已真实验证：hot capabilities 700B、冷资源完整、没有 pre-MCP shell/direct CLI/chat-thread 路由；真实 `jianyu_compile_test` 最终 succeeded/exit 0。**这些证据不能替代 `02201bd...` 自适应 status、deadline 最终快照、MCP schema 与 660 秒注册配置的 Windows/真实 Codex 复验。**
 
 ## Merge Gate
 
