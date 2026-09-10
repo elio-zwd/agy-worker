@@ -1,6 +1,6 @@
-# AGY Worker v0.3.2 Codex 路由修补本地复验
+# AGY Worker v0.3.2 MCP 热路径本地复验
 
-> 给用户本地 AI 的严格验收任务。只验收，不修代码、不提交、不合并、不删除 branch/data。失败时保留原始证据并返回 ChatGPT。
+> 给用户本地 AI 的严格验收任务。只验收，不修代码、不修改任何 `AGENTS.md`、不提交、不合并、不删除 branch/data。失败时保留原始证据并返回 ChatGPT。
 
 ## 0. 固定对象
 
@@ -9,18 +9,17 @@ repository: elio-zwd/agy-worker
 branch: perf/context-efficient-status-v032
 base: b51d81701f3cfe3859c485f87e42a03b22b4e3d7
 PREVIOUS_WINDOWS_PASS_HEAD: 87fb3ddd34c595c0b1be78db1a446711b994895f
-CHAT_THREAD_RED_HEAD: d73d6a4646f7d1cb4818f93a18ea74f31a2fd698
-CHAT_THREAD_FIX_HEAD: 73a2015c04dc84ad0d755cfe4831fb84fe4b6e17
-ROUTING_UPGRADE_RED_HEAD: 365da956791f562d2989286e363e855eeb94a2e6
-ROUTING_TARGET_HEAD: 31119240a5d5388b17f3f0d724644a479ec77b21
+ROUTING_UPGRADE_FIX_HEAD: 31119240a5d5388b17f3f0d724644a479ec77b21
+MCP_HOT_PATH_RED_HEAD: 7d8594ea16b18d261f07a4fcaba4442e0d7bf0fa
+MCP_HOT_PATH_CODE_HEAD: 70577e68e9843b187feeda9080d5ce976c19fbe4
 package: 0.3.2
 controller protocol: 2
 MCP tools: 6
 ```
 
-`ROUTING_TARGET_HEAD` 是当前待验收代码。它之后只允许 `docs/planning/context-efficient-status-v032/**` 的验收/状态文档变化；若出现新的 `src/`、`tests/`、scripts、config、依赖或其他生产变化，停止并报告。
+`MCP_HOT_PATH_CODE_HEAD` 是当前待验收生产代码。它之后只允许 `README.md` 与 `docs/planning/context-efficient-status-v032/**` 文档变化；若出现新的 `src/`、`tests/`、scripts、config、依赖或 `AGENTS.md` 变化，停止并报告。
 
-## 1. 已知历史证据
+## 1. 已知历史证据与本轮目标
 
 旧 HEAD `87fb3ddd34c595c0b1be78db1a446711b994895f` 已真实通过：
 
@@ -30,32 +29,40 @@ pytest: 96 passed / 0 failed / 0 skipped / 0 warnings
 working_tree before/after: clean
 ```
 
-但同一版本的真实 Codex 请求“让 AGY 跑一下编译”仍错误走了聊天/代理线程，出现“已列出聊天 / 已向聊天发送消息 / wait threads / 已读取聊天”。所以该版本**不是端到端 PASS**。
+之后真实 Codex 曾把 AGY 错当 chat/thread。用户在业务项目现有 `AGENTS.md` 中加入简短的“AGY是MCP”后，最新真实请求“使用AGY跑编译测试”已经正确进入 `agy_capabilities → agy_worker → agy_status`，因此本轮**不再改 Agents 路由**，只验 MCP 热路径是否减少无效上下文。
 
-当前修补把 `AGY/agy` 在 Worker 支持任务中的含义唯一绑定为本机 `agy_worker` MCP，并显式排除 chat/thread/agent/subagent。随后又修复了一个升级问题：机器上若已经注册旧 `<AGY_WORKER_ROUTING>` block，新 `register.ps1` 应原位升级该 managed block，而不是因正文不同报冲突；用户自己的前置 `developer_instructions` 必须保留。
+该次真实 transcript 同时暴露：
+
+- MCP 前先跑 `git status / branch / log / rg AGY`；
+- `agy_capabilities` 返回 Controller、limits、permissions、全部 workspace/worktree 等完整冷数据；
+- queued/unchanged 期间存在重复状态轮询和用户可见解释。
+
+本轮目标：已知映射时直接 `agy_worker`；未知映射时最多一次紧凑 `agy_capabilities`；完整诊断留给冷资源；queued/running 使用 25 秒 long-poll，unchanged 不逐轮解释。
 
 ## 2. 安全前置与当前 HEAD
+
+在 `D:\My\_Elio\agy-worker`：
 
 ```powershell
 Set-Location 'D:\My\_Elio\agy-worker'
 git status --short
-```
-
-若非空，不 stash/reset/clean，停止并报告。
-
-```powershell
 git fetch origin
 git switch perf/context-efficient-status-v032
 git pull --ff-only origin perf/context-efficient-status-v032
 $Head = (git rev-parse HEAD).Trim()
-$Target = '31119240a5d5388b17f3f0d724644a479ec77b21'
+$Target = '70577e68e9843b187feeda9080d5ce976c19fbe4'
 git merge-base --is-ancestor $Target HEAD
-Write-Host "routing_target_is_ancestor exit=$LASTEXITCODE"
+Write-Host "mcp_hot_path_code_is_ancestor exit=$LASTEXITCODE"
 git diff --name-only "$Target..HEAD"
 git status --short
 ```
 
-要求 ancestor exit `0`，且 target 之后只有本 planning 目录文档变化。
+要求：
+
+- 工作区开始时 clean；
+- ancestor exit `0`；
+- target 之后只能出现 `README.md` 和本 planning 目录文档；
+- **不要修改任何业务项目或 agy-worker 的 `AGENTS.md`。**
 
 ## 3. 当前 HEAD 权威回归
 
@@ -69,83 +76,59 @@ $DiffExit = $LASTEXITCODE
 Write-Host "git diff --check exit=$DiffExit"
 ```
 
-记录真实 exit code、passed/failed/skipped/warnings、compileall。必须 `scripts/check.ps1 exit 0`、`0 failed`、`git diff --check exit 0`。不要用历史 96 passed 推断当前结果。
+记录真实 exit code、passed/failed/skipped/warnings、compileall。必须 `scripts/check.ps1 exit 0`、`0 failed`、`git diff --check exit 0`。历史 `96 passed` 不能代替当前证据。
 
-## 4. 验证旧 managed block 可安全升级
+## 4. MCP 热/冷 capabilities 边界
 
-不要输出整个 `~/.codex/config.toml`。注册前先只读报告：
+正常 Codex 热路径不要为了验收主动读取冷资源。先在独立只读 probe 中核对 MCP server 行为；可以复用项目 `.venv` 导入 `agy_worker.server`，但不得改配置或源码。
 
-```powershell
-@'
-from pathlib import Path
-import tomllib
-p=Path.home()/'.codex'/'config.toml'
-d=tomllib.loads(p.read_text('utf-8'))
-s=d.get('developer_instructions','')
-print('before_begin_count=',s.count('<AGY_WORKER_ROUTING>'))
-print('before_end_count=',s.count('</AGY_WORKER_ROUTING>'))
-print('before_chat_thread_binding=',all(x in s for x in ['只指本机','聊天','线程','subagent']))
-'@ | .venv\Scripts\python.exe -
-```
+必须确认热工具 `agy_capabilities` 的 structured result：
 
-然后执行当前注册：
+- 顶层仅 `schema_version`、`workspaces`；
+- workspace 仅 `workspace_id`、`registered_path`、`allowed_commands`；
+- 只有存在额外 worktree 时才允许 `known_worktrees`；
+- 不得出现 `controller`、`limits`、`permissions`、`git`、`supports_worktrees`、`usage`。
 
-```powershell
-pwsh.exe -NoProfile -File scripts/register.ps1
-$RegisterExit = $LASTEXITCODE
-Write-Host "register exit=$RegisterExit"
-```
+冷资源保持能力：
 
-再只读检查：
+- `agy://capabilities` 仍包含 `enabled_kinds`、`controller`、`limits`、`permissions` 和完整 workspaces；
+- `agy://workspaces` 仍可包含 `git`、`supports_worktrees`、`known_worktrees` 等完整工作区诊断。
 
-```powershell
-@'
-from pathlib import Path
-import tomllib
-p=Path.home()/'.codex'/'config.toml'
-d=tomllib.loads(p.read_text('utf-8'))
-s=d.get('developer_instructions','')
-print('after_begin_count=',s.count('<AGY_WORKER_ROUTING>'))
-print('after_end_count=',s.count('</AGY_WORKER_ROUTING>'))
-print('worker_rule_present=','agy_worker' in s and 'agy.exe' in s)
-print('chat_thread_binding=',all(x in s for x in ['只指本机','聊天','线程','agent','subagent','让 AGY 跑一下编译']))
-print('direct_cli_prohibition=',('不得直接' in s) and ('agy -p' in s))
-print('mcp_registered=','agy_worker' in d.get('mcp_servers',{}))
-'@ | .venv\Scripts\python.exe -
-```
+如能记录 UTF-8 JSON 字节数，分别记录热 `agy_capabilities` 与旧 transcript 中完整 payload 的字节数；这是补充指标，不代替字段合同。
 
-要求 `register exit=0`、begin/end 各 `1`、其余布尔值均 True。再次执行 `scripts/register.ps1` 并重复 after 检查，begin/end 仍必须各 `1`，证明升级后重复注册幂等。
+## 5. 新 Codex 会话真实热路径
 
-> 若注册阶段出现“路由指令标记冲突或损坏”，不要手工改 `config.toml`，直接返回原始错误给 ChatGPT。
-
-## 5. 新 Codex 会话真实行为
-
-注册成功后**关闭旧测试会话并新开 Codex 会话**，进入此前实际业务项目。只发送：
+使用**已经存在“AGY是MCP”规则的业务项目当前状态**，不要再编辑 Agents。新开 Codex 会话，只发送：
 
 ```text
-让 AGY 跑一下编译
+使用AGY跑编译测试
 ```
 
-不要额外提示“用 MCP”，因为这里验证的是自然语言路由。
+保存可见 transcript 和工具顺序。
 
 ### PASS 条件
 
-必须同时满足：
+必须满足正确性：
 
-1. `AGY` 被解释为 `agy_worker` MCP，而不是聊天/线程/agent/subagent。
-2. 允许 `agy_capabilities`（必要时），随后应是 `agy_worker` → `agy_status(after_revision=...)`；需要失败细节时才按需 `agy_artifact_read`。
-3. transcript 中不得出现为寻找 AGY 而进行的“列出聊天 / 读取聊天 / 向聊天发送消息 / wait threads / spawn 或等待 subagent”等路线。
-4. transcript 中不得出现 `agy --help`、`agy -p`、direct `agy.exe` 等 shell/terminal fallback。
-5. 编译成功/失败以 Worker terminal operation/exit code 为依据；成功路径不应无条件读取完整 diagnostics/result/operation-log。
+1. 使用 `agy_worker` MCP，不走 chat/thread/subagent，也不 direct `agy/agy.exe/agy -p`。
+2. 编译/测试结论来自 Worker terminal operation/exit code；成功路径不无条件读取完整 artifacts。
 
-若 UI 显示 context/token 数值，可记录请求前后变化，但只作为补充指标；主要证据是工具 transcript 和 Worker compact terminal result。
+同时记录热路径效率：
+
+3. 不应仅为“确认 AGY、入口或映射”先跑 `git branch`、`git log`、`rg AGY`、`agy --help`。若确有业务项目自身规则要求 `git status` 等安全检查，原样记录规则/理由，不把它和 AGY discovery 混为一谈。
+4. 新会话若不知道 workspace/command，允许调用**一次** `agy_capabilities`；其 structured result 必须符合第 4 节紧凑合同。若映射已经明确，则应直接 `agy_worker`。
+5. `agy_status` 在 queued/running 后应优先使用上次 `revision` 作为 `after_revision` 且 `wait_ms=25000`。若 UI 不展示参数，记录 `unknown`，不要猜。
+6. `unchanged` 后无需每轮输出“我继续等待”等面向用户解释；直接继续 long-poll 即可。
+7. 若再次长时间 queued，不得改用 CLI 绕过；把 queue wait 作为独立现象报告，不在本轮自行修改 Controller。
+
+可选补充：同一 Codex 会话完成/结束第一轮后再发一次等价请求，观察已知 workspace/command 后是否跳过 `agy_capabilities`。该项用于评估进一步优化，不作为本轮硬性 PASS 门禁。
 
 ## 6. 返回 ChatGPT 的报告模板
 
 ```text
 branch_head:
-routing_target_is_ancestor:
-post_target_changed_files:
+mcp_hot_path_code_is_ancestor:
+post_code_changed_files:
 working_tree_before:
 
 scripts_check_exit:
@@ -156,39 +139,42 @@ pytest_warnings:
 compileall:
 git_diff_check_exit:
 
-before_begin_count:
-before_end_count:
-before_chat_thread_binding:
-register_exit_first:
-after_begin_count_first:
-after_end_count_first:
-worker_rule_present:
-chat_thread_binding:
-direct_cli_prohibition:
-mcp_registered:
-register_exit_second:
-after_begin_count_second:
-after_end_count_second:
+hot_capabilities_top_keys:
+hot_workspace_keys:
+hot_has_controller: yes/no
+hot_has_limits: yes/no
+hot_has_permissions: yes/no
+hot_has_git_flags: yes/no
+hot_capabilities_bytes_if_measured:
+cold_capabilities_full_preserved: yes/no
+cold_workspaces_full_preserved: yes/no
 
 new_codex_session: yes/no
 natural_language_request:
 observed_tools_in_order:
-chat_list_read_seen: yes/no
-chat_send_seen: yes/no
-thread_wait_seen: yes/no
-subagent_route_seen: yes/no
-direct_agy_help_seen: yes/no
-direct_agy_p_seen: yes/no
-direct_agy_exe_seen: yes/no
+pre_mcp_shell_seen: yes/no
+pre_mcp_shell_commands:
+pre_mcp_shell_reason_if_known:
+capabilities_call_count:
+capabilities_structured_keys:
+agy_worker_seen: yes/no
+status_calls:
+status_after_revision_seen: yes/no/unknown
+status_wait_25000_seen: yes/no/unknown
+unchanged_user_narration_seen: yes/no
+direct_agy_cli_seen: yes/no
+chat_thread_subagent_route_seen: yes/no
 worker_terminal_status:
 operation_exit_code:
 artifact_reads:
+queue_wait_if_observed:
 context_before_if_visible:
 context_after_if_visible:
 
+optional_second_request_capabilities_count:
 working_tree_after:
 open_findings:
 overall_recheck: PASS/FAIL
 ```
 
-本地 AI 只验收，不修代码。失败时保留 transcript、命令输出和 exit code，交回 ChatGPT 技术复核。
+本地 AI 只验收，不修代码。失败时保留 transcript、命令输出与 exit code，交回 ChatGPT 技术复核。
