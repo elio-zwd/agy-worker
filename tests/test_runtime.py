@@ -135,6 +135,138 @@ def test_running_cancel_keeps_existing_cancelling_semantics(runtime,monkeypatch)
     assert runtime.active[state['task_id']]['cancel'].is_set()
 
 
+def test_status_after_revision_timeout_returns_compact_unchanged(runtime):
+    state=runtime.submit(request(request_id='req-status-unchanged'))
+
+    result=runtime.status(state['task_id'],after_revision=state['revision'],wait_ms=0)
+
+    assert result=={
+        'task_id':state['task_id'],
+        'status':'queued',
+        'revision':state['revision'],
+        'unchanged':True,
+    }
+    encoded=json.dumps(result,ensure_ascii=False,separators=(',',':')).encode('utf-8')
+    assert len(encoded)<=256
+
+
+def test_public_running_state_is_compact(runtime):
+    state=runtime.submit(request(request_id='req-running-public'))
+    context=runtime.active[state['task_id']]
+    context['record']['status']='running'
+    context['record']['progress']={'agy_pid':1234,'captured_bytes':2048}
+    runtime._save(context['record'])
+
+    result=runtime.status(state['task_id'],wait_ms=0)
+
+    assert set(result)=={'task_id','session_id','turn','status','revision','progress'}
+    assert result['progress']=={'agy_pid':1234,'captured_bytes':2048}
+    encoded=json.dumps(result,ensure_ascii=False,separators=(',',':')).encode('utf-8')
+    assert len(encoded)<=512
+
+
+def test_terminal_public_result_is_compact_and_keeps_artifact_drill_down(runtime):
+    state=runtime.submit(request(request_id='req-terminal-compact'))
+    context=runtime.active[state['task_id']]
+    errors=[{'file':f'src/Error{index}.kt','line':index+1,'message':'错误'+('很长的诊断信息'*80)} for index in range(20)]
+    warnings=[{'file':f'src/Warning{index}.kt','line':index+1,'message':'警告'+('很长的诊断信息'*80)} for index in range(20)]
+    diagnostics_path=context['directory']/'errors.json'
+    diagnostics_path.write_text(json.dumps({'errors':errors,'warnings':warnings},ensure_ascii=False),encoding='utf-8')
+    context['artifacts'].add('errors',diagnostics_path)
+    full_result={
+        'schema_version':1,
+        'status':'failed',
+        'summary':'操作失败或未执行，请查看错误原文及证据。',
+        'workspace_id':'demo',
+        'workspace_path':str(context['source']),
+        'input_snapshot':'snapshot-value',
+        'agy':{'exit_code':1,'result_status':'FAILURE','pid':9999,'error':'agy detail'},
+        'operation':{
+            'command_id':'compile',
+            'exit_code':1,
+            'duration_ms':1234,
+            'termination_reason':None,
+            'errors':errors,
+            'warnings':warnings,
+            'total_errors':20,
+            'total_warnings':20,
+            'evidence':{'artifact_id':'operation-log'},
+        },
+        'source_changed':False,
+        'changed_files':[],
+        'errors':errors,
+        'warnings':warnings,
+        'total_errors':20,
+        'total_warnings':20,
+        'termination_reason':'operation_failed',
+        'enforcement':{'hook_and_broker':True,'os_isolation':False,'code_write':False},
+        'artifacts':[
+            {'artifact_id':f'artifact-{index}','size_bytes':1000+index,'sha256':'a'*64,
+             'media_type':'text/plain','created_at':'2026-09-10T00:00:00Z','sensitive':False}
+            for index in range(12)
+        ],
+        'result_artifact_id':'result',
+        'artifact_count':14,
+        'truncated':True,
+    }
+    result_path=context['directory']/'result.json'
+    result_path.write_text(json.dumps(full_result,ensure_ascii=False),encoding='utf-8')
+    context['artifacts'].add('result',result_path)
+    context['record'].update(status='failed',result=full_result)
+    runtime._save(context['record'])
+
+    public=runtime.status(state['task_id'],wait_ms=0)
+    compact=public['result']
+
+    assert public['status']=='failed'
+    assert compact['schema_version']==2
+    assert compact['operation']['exit_code']==1
+    assert compact['operation']['total_errors']==20
+    assert compact['operation']['total_warnings']==20
+    assert compact['diagnostics_artifact_id']=='errors'
+    assert compact['result_artifact_id']=='result'
+    assert 'errors' not in compact
+    assert 'warnings' not in compact
+    assert 'artifacts' not in compact
+    assert 'workspace_path' not in compact
+    assert 'input_snapshot' not in compact
+    assert 'agy' not in compact
+    assert 'enforcement' not in compact
+    encoded=json.dumps(public,ensure_ascii=False,separators=(',',':')).encode('utf-8')
+    assert len(encoded)<=1536
+
+    diagnostics=runtime.read_artifact(state['task_id'],'errors',view='text',start_line=1,line_count=20)
+    assert diagnostics['artifact_id']=='errors'
+    assert diagnostics['text']
+
+
+def test_terminal_status_wins_over_same_after_revision(runtime):
+    state=runtime.submit(request(request_id='req-terminal-same-rev'))
+    context=runtime.active[state['task_id']]
+    context['record'].update(
+        status='succeeded',
+        result={
+            'schema_version':1,
+            'status':'succeeded',
+            'summary':'操作成功，日志采集完成。',
+            'source_changed':False,
+            'termination_reason':None,
+            'artifacts':[],
+            'artifact_count':0,
+            'result_artifact_id':'result',
+            'truncated':False,
+        },
+    )
+    runtime._save(context['record'])
+    terminal_revision=context['record']['revision']
+
+    result=runtime.status(state['task_id'],after_revision=terminal_revision,wait_ms=0)
+
+    assert result['status']=='succeeded'
+    assert 'result' in result
+    assert 'unchanged' not in result
+
+
 def test_snapshot_includes_local_submodule(runtime, monkeypatch):
     source=Path(runtime.config['workspaces']['demo']['source'])
     (source/'.git').mkdir()
