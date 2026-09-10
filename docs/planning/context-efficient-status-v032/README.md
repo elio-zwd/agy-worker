@@ -15,7 +15,7 @@
 ```text
 base: b51d81701f3cfe3859c485f87e42a03b22b4e3d7
 branch: perf/context-efficient-status-v032
-phase: planning_pr_preparation
+phase: draft_pr_open_waiting_implementation_authorization
 production code changed: false
 package target: 0.3.2
 controller protocol target: 2
@@ -23,8 +23,10 @@ implementation authorized: false
 real v0.3.2 tests: not run
 real AGY acceptance: not run
 merge authorized: false
-open PR: pending creation
+open PR: #2 (Draft)
 ```
+
+PR：`https://github.com/elio-zwd/agy-worker/pull/2`
 
 用户本轮已明确授权：分析实践数据，并在 GitHub 建立 PR、PLAN、TASK，避免上下文丢失。本轮授权覆盖这些规划 artifact 和 Draft PR；不自动等价于授权开始生产实现。
 
