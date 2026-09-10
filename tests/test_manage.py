@@ -27,6 +27,14 @@ def _prepare_config(monkeypatch, tmp_path, *, developer_instructions=None):
     return path
 
 
+def _old_managed_block():
+    return (
+        f"{manage.CODEX_ROUTING_BEGIN}\n"
+        "旧版 AGY Worker 路由规则。\n"
+        f"{manage.CODEX_ROUTING_END}"
+    )
+
+
 def test_register_adds_codex_routing_without_overwriting_existing_instructions(monkeypatch, tmp_path):
     original = "保留用户已有 developer instruction。"
     path = _prepare_config(monkeypatch, tmp_path, developer_instructions=original)
@@ -50,6 +58,25 @@ def test_register_adds_codex_routing_without_overwriting_existing_instructions(m
     repeated_instructions = str(repeated["developer_instructions"])
     assert repeated_instructions.count(manage.CODEX_ROUTING_BEGIN) == 1
     assert repeated_instructions.count(manage.CODEX_ROUTING_END) == 1
+
+
+def test_register_upgrades_previous_managed_block_and_preserves_user_prefix(monkeypatch, tmp_path):
+    original = "用户自己的全局规则。"
+    old_block = _old_managed_block()
+    path = _prepare_config(
+        monkeypatch,
+        tmp_path,
+        developer_instructions=original + "\n\n" + old_block,
+    )
+
+    manage.register()
+    document = tomlkit.parse(path.read_text("utf-8"))
+    instructions = str(document["developer_instructions"])
+
+    assert instructions == original + "\n\n" + manage.CODEX_ROUTING_BLOCK
+    assert "旧版 AGY Worker 路由规则" not in instructions
+    assert instructions.count(manage.CODEX_ROUTING_BEGIN) == 1
+    assert instructions.count(manage.CODEX_ROUTING_END) == 1
 
 
 def test_routing_rule_closes_chat_thread_agent_loophole():
@@ -77,6 +104,22 @@ def test_unregister_removes_only_managed_routing_and_keeps_user_config(monkeypat
     assert str(document["developer_instructions"]) == original
     assert "agy_worker" not in document["mcp_servers"]
     assert document["mcp_servers"]["other"]["args"] == ["--keep"]
+
+
+def test_unregister_removes_previous_managed_block_and_keeps_user_prefix(monkeypatch, tmp_path):
+    original = "用户自己的全局规则。"
+    path = _prepare_config(
+        monkeypatch,
+        tmp_path,
+        developer_instructions=original + "\n\n" + _old_managed_block(),
+    )
+
+    manage.register(remove=True)
+    document = tomlkit.parse(path.read_text("utf-8"))
+
+    assert str(document["developer_instructions"]) == original
+    assert "agy_worker" not in document["mcp_servers"]
+    assert document["mcp_servers"]["other"]["command"] == "other.exe"
 
 
 def test_unregister_removes_developer_instruction_key_when_worker_created_it(monkeypatch, tmp_path):
