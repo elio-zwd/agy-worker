@@ -18,9 +18,9 @@
       "title": "After Revision"
     },
     "wait_ms": {
-      "default": 0,
-      "maximum": 25000,
-      "minimum": 0,
+      "default": 50000,
+      "maximum": 600000,
+      "minimum": 50000,
       "title": "Wait Ms",
       "type": "integer"
     }
@@ -28,6 +28,6 @@
   "required": [
     "task_id"
   ],
-  "title": "StatusRequest",
+  "title": "McpStatusRequest",
   "type": "object"
 }
