@@ -189,6 +189,21 @@ def test_worker_and_continue_schemas_hide_unavailable_permissions_and_cold_limit
         assert set(limit_properties)=={'total_timeout_sec'}
 
 
+def test_status_schema_defaults_to_50s_and_allows_50_to_600s(monkeypatch):
+    """公开 schema 必须把模型引导到默认 50 秒、显式 50～600 秒的等待预算。"""
+    handlers=capture_server(monkeypatch,RecordingClient())
+    result=list_tools(handlers)
+    status_schema=next(
+        tool.model_dump(by_alias=True)['inputSchema']
+        for tool in result.tools if tool.name=='agy_status'
+    )
+
+    wait_schema=status_schema['properties']['wait_ms']
+    assert wait_schema['default']==50000
+    assert wait_schema['minimum']==50000
+    assert wait_schema['maximum']==600000
+
+
 def test_worker_mcp_request_expands_safe_internal_defaults(monkeypatch):
     """热 schema 只收必要字段，传给 Controller 前仍补齐内部安全默认值。"""
     client=SubmitClient()
@@ -237,6 +252,25 @@ def test_worker_mcp_rejects_hidden_shell_and_artifact_tuning_before_controller(m
     assert client.calls==[]
 
 
+def test_status_rejects_wait_outside_public_range_before_controller(monkeypatch):
+    """低于 50 秒或高于 600 秒的外部等待值必须在 MCP 边界被拒绝。"""
+    client=StatusSequenceClient([])
+    handlers=capture_server(monkeypatch,client)
+
+    too_short=call_tool(handlers,'agy_status',{
+        'task_id':'task-1','after_revision':1,'wait_ms':49999,
+    })
+    too_long=call_tool(handlers,'agy_status',{
+        'task_id':'task-1','after_revision':1,'wait_ms':600001,
+    })
+
+    assert too_short.is_error is True
+    assert too_short.structured_content['error']=='invalid_request'
+    assert too_long.is_error is True
+    assert too_long.structured_content['error']=='invalid_request'
+    assert client.calls==[]
+
+
 def test_status_coalesces_progress_and_unchanged_until_terminal(monkeypatch):
     """单次 MCP long-poll 应吞掉中间 progress/unchanged，避免每个 revision 都返回 Codex。"""
     client=StatusSequenceClient([
@@ -250,17 +284,75 @@ def test_status_coalesces_progress_and_unchanged_until_terminal(monkeypatch):
     handlers=capture_server(monkeypatch,client)
 
     result=call_tool(handlers,'agy_status',{
-        'task_id':'task-1','after_revision':1,'wait_ms':25000,
+        'task_id':'task-1','after_revision':1,'wait_ms':50000,
     })
 
     assert result.structured_content['status']=='succeeded'
     assert result.structured_content['revision']==3
     assert [call[1]['after_revision'] for call in client.calls]==[1,2,2]
-    assert all(call[1]['wait_ms']>0 for call in client.calls)
+    assert all(0<call[1]['wait_ms']<=25000 for call in client.calls)
+
+
+def test_status_default_50s_is_split_into_controller_long_polls(monkeypatch):
+    """省略 wait_ms 时使用 50 秒总预算，但 Controller 单段仍不得超过 25 秒。"""
+    client=StatusSequenceClient([
+        {'task_id':'task-1','status':'running','revision':2,'progress':{'captured_bytes':100}},
+        {
+            'task_id':'task-1','session_id':'session-1','turn':1,'status':'succeeded','revision':3,
+            'result':{'summary':'操作成功。','operation':{'exit_code':0}},
+        },
+    ])
+    ticks=iter([100.0,100.0,120.0])
+    monkeypatch.setattr(server_module.time,'monotonic',lambda:next(ticks))
+    handlers=capture_server(monkeypatch,client)
+
+    result=call_tool(handlers,'agy_status',{
+        'task_id':'task-1','after_revision':1,
+    })
+
+    assert result.structured_content['status']=='succeeded'
+    assert [call[1]['wait_ms'] for call in client.calls]==[25000,25000]
+
+
+def test_status_600s_budget_returns_immediately_when_terminal_arrives(monkeypatch):
+    """600 秒只是最大等待预算；终态出现后必须立即返回且不继续内部轮询。"""
+    client=StatusSequenceClient([
+        {'task_id':'task-1','status':'running','revision':2,'progress':{'captured_bytes':100}},
+        {
+            'task_id':'task-1','session_id':'session-1','turn':1,'status':'succeeded','revision':3,
+            'result':{'summary':'操作成功。','operation':{'exit_code':0}},
+        },
+    ])
+    ticks=iter([100.0,100.0,101.0])
+    monkeypatch.setattr(server_module.time,'monotonic',lambda:next(ticks))
+    handlers=capture_server(monkeypatch,client)
+
+    result=call_tool(handlers,'agy_status',{
+        'task_id':'task-1','after_revision':1,'wait_ms':600000,
+    })
+
+    assert result.structured_content['status']=='succeeded'
+    assert [call[1]['wait_ms'] for call in client.calls]==[25000,25000]
+    assert len(client.calls)==2
+
+
+def test_status_without_after_revision_reads_immediate_snapshot(monkeypatch):
+    """没有已知 revision 时只读当前快照，不把公开 50 秒默认值透传给 Controller。"""
+    client=StatusSequenceClient([
+        {'task_id':'task-1','status':'running','revision':7,'progress':{'captured_bytes':100}},
+    ])
+    handlers=capture_server(monkeypatch,client)
+
+    result=call_tool(handlers,'agy_status',{'task_id':'task-1'})
+
+    assert result.structured_content['status']=='running'
+    assert result.structured_content['revision']==7
+    assert client.calls[0][1]['wait_ms']==0
+    assert len(client.calls)==1
 
 
 def test_status_coalescing_uses_one_total_wait_budget(monkeypatch):
-    """中间 revision 不能把 25 秒预算重置成每轮新的 25 秒。"""
+    """中间 revision 不能把 50 秒总预算重置成每轮新的 50 秒。"""
     client=StatusSequenceClient([
         {'task_id':'task-1','status':'running','revision':2,'progress':{'captured_bytes':100}},
         {'task_id':'task-1','status':'running','revision':3,'progress':{'captured_bytes':200}},
@@ -269,12 +361,12 @@ def test_status_coalescing_uses_one_total_wait_budget(monkeypatch):
             'result':{'summary':'操作成功。','operation':{'exit_code':0}},
         },
     ])
-    ticks=iter([100.0,100.0,110.0,120.0])
+    ticks=iter([100.0,100.0,135.0,145.0])
     monkeypatch.setattr(server_module.time,'monotonic',lambda:next(ticks))
     handlers=capture_server(monkeypatch,client)
 
     result=call_tool(handlers,'agy_status',{
-        'task_id':'task-1','after_revision':1,'wait_ms':25000,
+        'task_id':'task-1','after_revision':1,
     })
 
     assert result.structured_content['status']=='succeeded'
