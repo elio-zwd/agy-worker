@@ -623,7 +623,7 @@ class Runtime:
         if name in ("new_page","navigate_page"):
             if name=="navigate_page" and toolargs.get("type","url")!="url":
                 raise WorkerError("permission_denied","导航必须显式指定 URL")
-            if origin(toolargs.get("url","") ) not in {origin(x) for x in permission.origins}:
+            if origin(toolargs.get("url","")) not in {origin(x) for x in permission.origins}:
                 raise WorkerError("permission_denied","目标 origin 未授权")
         if c["browser"] is None:
             c["browser"]=Browser(self.config["browser"],c["directory"]/"browser.stderr.log")
