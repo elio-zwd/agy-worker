@@ -1,9 +1,9 @@
 # AGY Worker Controller v0.3.1 加固规格
 
-> 状态：**Draft / 等待用户确认后进入生产代码实施**  
-> 规划分支：`fix/controller-hardening-v031`  
-> Base：`904b75a6e7b9d0b75c0ae8f63924c3ed0acf5066` (`main`)  
-> 日期：2026-09-09
+> 状态：**已批准；实现完成后等待最终 Windows 验收**
+> 规划分支：`fix/controller-hardening-v031`
+> Base：`904b75a6e7b9d0b75c0ae8f63924c3ed0acf5066` (`main`)
+> 日期：2026-09-09；2026-09-10 根据真实 Windows remediation 证据同步生命周期细节
 
 ## 1. 背景
 
@@ -23,7 +23,7 @@ AGY CLI
 
 该结构解决了多个 Codex 对话各自启动 stdio MCP 时争抢 `runtime.lock`、导致第二个 MCP 在握手前退出的问题。现阶段不重做这条架构，而是针对 v0.3 审查中发现的生命周期、升级、诊断、安全与并发边界进行加固。
 
-当前事实以本规格 Base SHA 的仓库内容为准。`docs/部署验收.md` 中的历史本机通过记录只作为历史证据，不等同于本分支修改后的验证结果。
+当前事实以本规格 Base SHA 的仓库内容为设计起点；当前执行状态以同目录 `TASKS.md` 为准。`docs/部署验收.md` 中的历史本机通过记录只作为历史证据，不等同于本分支修改后的最终验证结果。
 
 ## 2. 目标
 
@@ -194,12 +194,13 @@ Bridge 的当前实例验证顺序：
 2. `config_path` 与调用方配置路径一致；
 3. endpoint 为严格 loopback；
 4. health 可连接且 token 正确；
-5. protocol 匹配；
-6. config hash 匹配；
-7. implementation hash 匹配；
-8. state 与 health 的 `instance_id/pid/hash/version` 一致。
+5. authenticated health 必须是符合模型的 JSON object；
+6. protocol 匹配；
+7. config hash 匹配；
+8. implementation hash 匹配；
+9. state 与 health 的 `instance_id/pid/hash/version` 一致。
 
-只有全部满足才视为 healthy。
+只有全部满足才视为 healthy。合法 JSON 但非 object 的 health（例如数组）必须转换为受控 `controller_state_invalid`，不得泄漏 `AttributeError` 等内部异常。
 
 ## 7. 跨协议显式停止
 
@@ -217,8 +218,9 @@ ControllerClient.stop_existing(config_path, timeout=...)
 4. 对 v1 Controller，向 `/control/stop` 发送 state 自己的 `protocol_version`；
 5. 对 v2 及以后，`/control/stop` 只要鉴权成功即可接受停止，不要求与 Bridge 当前协议一致；
 6. 记录本次准备停止的 `instance_id`（v1 没有时使用 `pid + token` 作为 legacy 身份）；
-7. 等待目标 state 被删除或 health 确认目标实例已消失；
-8. 如果 state 已被另一个新实例替换，停止流程不得继续攻击新实例，应返回“目标已退出 / 已被替代”的可识别结果。
+7. 发送 stop 后继续轮询目标 state，只有目标 state 已删除时才返回 `stopped`；health/listener 先不可达**不能单独证明完整退出**；
+8. 如果 state 已被另一个新实例替换，停止流程不得继续攻击新实例，应返回可识别的 `replaced` 结果；
+9. deadline 到期而目标 state 仍存在时返回 `controller_stop_timeout`。
 
 `manage stop` 增加：
 
@@ -226,13 +228,11 @@ ControllerClient.stop_existing(config_path, timeout=...)
 python -m agy_worker.manage stop --config <path>
 ```
 
-`scripts/stop.ps1` 增加可选 `-Config` 并转发。
-
-默认仍是正式 `config/runtime.toml`。
+`scripts/stop.ps1` 增加可选 `-Config` 并转发。默认仍是正式 `config/runtime.toml`。
 
 ## 8. Controller 启动接管
 
-`ControllerClient._ensure()` 改为 deadline 驱动循环，而不是只抢一次启动锁。
+`ControllerClient._ensure()` 使用 deadline 驱动循环，而不是只抢一次启动锁。
 
 伪流程：
 
@@ -243,7 +243,9 @@ while before deadline:
     尝试非阻塞获得 controller-launch.lock
     如果获得：
         再次 health（double check）
-        仍未就绪时，按冷却间隔尝试 launch
+        读取共享 pending launch PID
+        如果已有 pending PID 且仍存活 -> 等待，不重复 launch
+        否则按冷却间隔尝试 launch，并把新 PID 写回共享 pending 元数据
         释放锁
 
     短退避
@@ -256,7 +258,9 @@ while before deadline:
 - 等待者在原 lock owner 崩溃后必须能重新尝试拿锁；
 - 正在退出的旧 Runtime 暂时持有 `runtime.lock` 时，第一台新 Controller 即便以 `runtime_busy` 退出，Bridge 仍可在 deadline 内重新尝试；
 - 单个 Bridge 不得高频创建进程，launch attempt 使用至少 0.5 秒冷却；
-- WMI 启动解析 `Win32_Process.Create` 返回的 `ProcessId`，用于诊断，但 Controller 是否 ready 仍只由带 token 的 health 决定；
+- pending launch 信息需要跨 Bridge 共享，不能只用 client 内存 cooldown；若 pending launcher 仍存活，其他 Bridge 不得重复创建 Controller；
+- WMI 启动解析 `Win32_Process.Create` 返回的 `ProcessId`，用于启动归属与诊断；Controller 是否 ready 仍只由带 token 的 authenticated health 决定；
+- Windows venv 的 `pythonw.exe` 是 redirector launcher：WMI 返回的 launcher PID 可以与 health/state 中真实 Python Controller PID 不同，不能把数值相等当成正确性条件；
 - 同一数据目录最终仍只允许一个 Runtime。
 
 ## 9. `run-task.py --config` 的 Controller 所有权
@@ -290,6 +294,14 @@ started_instance_id: str | None
 ```
 
 只有“当前 client 发起 launch，且最终 healthy state 的实例就是该 launch 所产生实例”才能把 `started_controller` 置 true。仅仅等待另一个 Bridge 启动成功不算 ownership。
+
+归属证明规则：
+
+- 非 redirector 情况下，healthy state PID 与本 client launch PID 相同可直接证明；
+- Windows venv 情况下，若 PID 不同，必须同时证明 WMI launcher PID 仍存活，并由 `Win32_Process` 父链确认 healthy Controller PID 是该 launcher 的后代；
+- 进程关系查询失败、launcher 已退出或无法证明后代关系时，一律保持 `started_controller=false`，不能冒认 ownership。
+
+最终 cleanup 仍以 `started_instance_id` 做 replacement-safe stop，不以 launcher PID 直接停止进程。
 
 ## 10. 重连与 MCP timeout
 
@@ -335,7 +347,7 @@ Runtime 保存 executor 返回的 `Future` 到任务 context。
 - 从 `active` 移除；
 - 不等待前面的任务结束后才执行 `_run()`。
 
-取消 running task继续沿用已有 cancel event + Job Object 终止逻辑。
+取消 running task 继续沿用已有 cancel event + Job Object 终止逻辑。
 
 `agy_capabilities.controller` 增加 `max_inflight_tasks: 16`。
 
@@ -351,7 +363,7 @@ controller_data_acl.broad_read_principals
 controller_data_acl.token_confidentiality_advisory
 ```
 
-检查目标是发现 `Everyone`、`BUILTIN\\Users`、`Authenticated Users` 等宽泛主体对 data_dir 明显拥有读取权限。若检查 API 失败：
+检查目标是发现 `Everyone`、`BUILTIN\Users`、`Authenticated Users` 等宽泛主体对 data_dir 明显拥有读取权限。若检查 API 失败：
 
 - `checked=false`；
 - doctor 给出可操作警告；
@@ -405,21 +417,25 @@ v0.3 的“维护者辅助清洗”当前是**工作流约束**：由调用方�
 1. config 改变后，新 Bridge 拒绝旧 Controller；
 2. Controller 实现摘要改变后，新 Bridge 拒绝旧 Controller；
 3. 非 `http://127.0.0.1:<port>` state 被拒绝且不发网络请求；
-4. v2 Bridge 可通过管理停止路径停止模拟的 v1 Controller；
-5. `stop --config` 作用于目标 custom data_dir，并等待目标实例真正退出；
-6. 启动锁 owner 退出后 waiter 可接管；
-7. 旧 Controller stopping / runtime lock 短暂占用后可最终启动新 Controller；
-8. custom `run-task --config` 停止自己启动的 Controller；
-9. custom `run-task --config` 不停止原本已存在的 Controller；
-10. `--keep-controller` 明确保留 owned custom Controller；
-11. status 重连第二次 `wait_ms=0`；
-12. 同 request_id 重试不被背压拒绝；
-13. 第 17 个新 inflight 请求返回 `worker_busy`；
-14. queued task cancel 后无需等执行槽即可终态 `cancelled`；
-15. ACL 检查失败时只报告 advisory，不虚构安全；
-16. 两个 stdio Bridge 仍能共享一个 Controller；
-17. Controller 重启仍把未完成任务标为 `interrupted`，历史 artifact 可读；
-18. 六个公开 MCP 工具名称保持不变。
+4. authenticated health 若不是 object，受控返回 `controller_state_invalid`；
+5. v2 Bridge 可通过管理停止路径停止模拟的 v1 Controller；
+6. `stop --config` 作用于目标 custom data_dir，并等待目标 state 真正消失；
+7. health listener 先关闭但目标 state 尚存时，stop 不能提前返回成功；
+8. 启动锁 owner 退出后 waiter 可接管；
+9. 旧 Controller stopping / runtime lock 短暂占用后可最终启动新 Controller；
+10. launch 后共享 pending PID 被发布，存活 pending PID 能阻止重复 launch；
+11. Windows venv launcher PID 与 Controller PID 不同时，能基于后代关系建立 owned instance；
+12. custom `run-task --config` 停止自己启动的 Controller；
+13. custom `run-task --config` 不停止原本已存在的 Controller；
+14. `--keep-controller` 明确保留 owned custom Controller；
+15. status 重连第二次 `wait_ms=0`；
+16. 同 request_id 重试不被背压拒绝；
+17. 第 17 个新 inflight 请求返回 `worker_busy`；
+18. queued task cancel 后无需等执行槽即可终态 `cancelled`；
+19. ACL 检查失败时只报告 advisory，不虚构安全；
+20. 两个 stdio Bridge 仍能共享一个 Controller；
+21. Controller 重启仍把未完成任务标为 `interrupted`，历史 artifact 可读；
+22. 六个公开 MCP 工具名称保持不变。
 
 ### 16.2 Windows 本地验收
 
@@ -431,28 +447,29 @@ v0.3 的“维护者辅助清洗”当前是**工作流约束**：由调用方�
 - Bridge 全部退出后验证同一 Controller PID/instance 仍存活；
 - 显式 stop 后验证 state 消失且 health 不再可达；
 - custom config 运行结束后验证没有遗留它自己启动的隐藏 Controller；
-- `git status --short` / diff 检查，确认验收过程没有修改受版本控制的生产文件。
+- `git status --short` / `git diff --check`，确认验收过程没有修改受版本控制的生产文件，且当前分支无 whitespace error。
 
 正式 AGY / HBuilderX / Android 不属于这次 Controller hardening 的必要通过条件，除非实现改动实际触及对应执行链路；若未执行不得声称通过。
 
 ## 17. 开发与审查流程
 
-按项目与 Superpowers Web Adapter：
+按项目指令与 Superpowers Web Adapter：
 
 ```text
 规格确认
 → 详细 PLAN / TASKS
-→ 每个行为先写失败测试（RED）
-→ 本地 AI 实际执行并确认 RED（ChatGPT Web 无本地 test runner）
-→ ChatGPT 写最小实现
-→ 本地 AI / 可用 CI 执行 GREEN
-→ 重构
-→ 单任务规格复核
-→ 单任务代码质量复核
-→ 全量本地验收
-→ 最终 diff / 证据复核
+→ 行为测试与根因验证
+→ ChatGPT 在独立 GitHub 分支持续实现
+→ 远端规格复核 pass
+→ 远端代码质量复核 pass
+→ 锁定精确 final HEAD
+→ 本地 AI 在 Windows 上一次性完整执行 LOCAL-ACCEPTANCE.md
+→ ChatGPT 按 receiving-code-review 技术核对本地证据
+→ verification-before-completion
 → Draft PR 交付
 ```
+
+用户已明确选择“远端开发全部完成后，再由本地 AI 做最终一次完整验收”。Remediation 期间只有在真实 Windows 行为无法由远端静态证据判断时才做聚焦 RED/GREEN，不恢复逐 Task 打断模式。
 
 当前仓库没有 GitHub Actions workflow，因此不能用不存在的 CI 替代本地测试证据。
 
