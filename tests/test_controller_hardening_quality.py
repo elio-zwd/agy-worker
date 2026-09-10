@@ -186,11 +186,16 @@ def test_owned_launch_accepts_healthy_descendant_pid(monkeypatch):
     client._launched_pids = {41001}
     state = {"pid": 42002, "instance_id": "a" * 32}
 
+    monkeypatch.setattr(controller_client_module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        ControllerClient,
+        "_process_is_alive",
+        staticmethod(lambda pid: pid == 41001),
+    )
     monkeypatch.setattr(
         ControllerClient,
         "_process_descends_from",
         staticmethod(lambda pid, ancestor: (pid, ancestor) == (42002, 41001)),
-        raising=False,
     )
 
     client._accept_healthy_state(state)
