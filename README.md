@@ -16,9 +16,9 @@ v0.3.1 不会自动停止或自动重启 stale Controller。新 Bridge 发现后
 
 ### v0.3.2 低上下文返回状态
 
-`perf/context-efficient-status-v032` 收缩 Codex 默认可见的状态/结果热路径：任务仍完整执行并保存证据，但普通 status 不再重复展开 warning/error 正文和 artifact manifest，`agy_capabilities` 默认也只返回 workspace/command 路由所需字段。当前分支的生产实现已写入，仍需最终 Windows + 真实 AGY 验收；在验收完成前不能把本节描述为正式已验证能力。
+`perf/context-efficient-status-v032` 收缩 Codex 默认可见的请求、状态与结果热路径：任务仍完整执行并保存证据，普通 status 不重复展开 warning/error 正文和 artifact manifest，`agy_capabilities` 默认只返回 workspace/command 路由字段；`agy_worker/agy_continue` 的公开输入也不再展示当前不可用的 shell/code_write 或无需模型调整的 artifact/summary 字节预算。当前分支的新一轮修补仍需 Windows + 真实 Codex 复验；在验收完成前不能把本节描述为正式已验证能力。
 
-v0.3.2 不改变 Controller protocol v2、六个 MCP 工具、单 Runtime、单执行槽、16 inflight、权限或 request_id 语义。它只改变公开结果视图和 MCP 表示方式，目的是让 AGY 继续承担高噪声工作，而 Codex 默认只接收下一步判断所需信息。
+v0.3.2 不改变 Controller protocol v2、六个 MCP 工具、单 Runtime、单执行槽、16 inflight、Runtime 权限执行边界或 request_id 语义。Runtime 仍保存完整 progress/revision；MCP server 只在单次 status 等待预算内合并中间 progress/unchanged revision，减少 Codex tool round-trip。
 
 ## 当前可用范围
 
@@ -28,7 +28,7 @@ v0.3.2 不改变 Controller protocol v2、六个 MCP 工具、单 Runtime、单�
 | 浏览器 | 已启用；独立无头 Edge，支持观察、截图、console/network；交互另需 `browser_interact` |
 | 图片 | 已启用；真实 PNG/JPEG 输入，经 MCP 图片内容交给 AGY |
 | Android / Logcat | 保留接口设计，未启用；尚未完成设备与包范围验收 |
-| 任意 shell、源码写入 | 拒绝，包括传入 `code_write=true`；等待系统隔离验收 |
+| 任意 shell、源码写入 | 拒绝；公开 MCP schema 不再暴露这些字段，Runtime 内部仍 fail-closed |
 
 **权限边界的实际强度：当前是 hook + Broker 的工具授权，不是 Windows 安全沙箱。** AGY 和已登记命令使用当前用户身份。项目副本避免常规构建写入原源码，但不是防恶意代码的隔离环境；已有 node_modules 通过 junction 复用，未设置系统只读权限。不要把这个版本用于不可信仓库的任意构建。浏览器 origins 校验覆盖入口 URL，不是重定向、子资源和网络出口防火墙。
 
@@ -45,7 +45,7 @@ pwsh.exe -NoProfile -File scripts/check.ps1
 pwsh.exe -NoProfile -File scripts/register.ps1
 ```
 
-`register.ps1` 登记 AGY 私有 Broker 及 Codex 的 `agy_worker`，保留其他 MCP。Codex 原配置备份在 `work/backups`，这些备份可能包含敏感配置，请勿提交。重新安装使用 `scripts/install.ps1 -Python <Python完整路径>`，依赖锁定在 `requirements.lock` 和 `vendor/browser/package-lock.json`。
+`register.ps1` 登记 AGY 私有 Broker及 Codex 的 `agy_worker`，保留其他 MCP。Codex 原配置备份在 `work/backups`，这些备份可能包含敏感配置，请勿提交。重新安装使用 `scripts/install.ps1 -Python <Python完整路径>`，依赖锁定在 `requirements.lock` 和 `vendor/browser/package-lock.json`。
 
 同一数据目录仍只允许一个 Runtime，但可以同时存在多个 stdio Bridge。Controller 继续只有 1 个执行槽；v0.3.1 最多接受 16 个排队或运行中的 inflight 任务，第 17 个新的逻辑请求返回 `worker_busy`。同 `request_id`、同 fingerprint 的幂等重试在容量已满时仍返回原 task；queued Future 若尚未开始执行，`agy_cancel` 会直接进入 `cancelled`，无需等待前面的任务释放执行槽。
 
@@ -79,18 +79,20 @@ Controller token 的保密性仍依赖本机用户和目录 ACL。`doctor` 在 v
 |---|---|
 | `agy_capabilities` | 仅在 workspace_id 或 command_id 未知时查询紧凑路由表；完整诊断走只读资源 |
 | `agy_worker` | 提交任务，立即返回 task_id、session_id 和状态 |
-| `agy_continue` | 同工作区续轮；必须传 session_id、expected_turn 及完整任务授权 |
-| `agy_status` | 查询或最多等待 25 秒；queued/running 优先使用 after_revision + wait_ms=25000 长轮询 |
+| `agy_continue` | 同工作区续轮；必须传 session_id、expected_turn 及本轮公开权限 |
+| `agy_status` | 查询或最多等待 25 秒；单次调用在该总预算内合并中间 progress/unchanged revision |
 | `agy_cancel` | 取消排队/运行任务，可重复调用 |
 | `agy_artifact_read` | 按证据 ID 读取元数据、最多 200 行文本或图片 |
 
 已知 `workspace_id` 和 `command_id` 时直接调用 `agy_worker`，不要仅为定位 AGY/MCP 路由而先执行 `git status`、`git branch`、`git log`、`rg AGY` 或 `agy --help`。映射未知时调用一次 `agy_capabilities`；其默认 structured result 只保留 `schema_version` 和每个 workspace 的 `workspace_id`、`registered_path`、`allowed_commands`，存在额外 Git worktree 时再带 `known_worktrees`。完整 limits、Controller、权限和 workspace/worktree 诊断仍保留在 `agy://capabilities` 与 `agy://workspaces` 冷资源中。
 
-精确请求字段以 `schemas/*.json` 为准。MCP Resources 同时提供只读的 `agy://capabilities` 和 `agy://workspaces`；资源模板查询返回空列表，不再产生 Method not found。每轮重新授权，续会话不代表继承额外权限。
+精确请求字段以 `schemas/*.json` 为准。当前公开 `agy_worker/agy_continue` 不包含 `kind=shell`、`permissions.shell`、`code_write/write_paths/write_reason`；这些未开放能力不会再诱导 Codex 申请。公开 `limits` 只允许可选的 `total_timeout_sec`（10～1800 秒，默认 300）。`summary_max_bytes=16384` 与 `artifact_max_bytes=536870912` 仍是 Runtime 内部安全默认值，不由普通 MCP 热路径调整。每轮重新授权，续会话不代表继承额外权限。
 
 ### v0.3.2 紧凑 status / result 合同
 
-调用 `agy_status` 时，queued/running 优先把上一次看到的 `revision` 作为 `after_revision`，并使用 `wait_ms=25000` 等待状态变化。如果最多等待 25 秒后仍没有更高 revision，且任务尚未进入终态，只返回最小无变化 envelope：
+调用 `agy_status` 时，queued/running 把上一次看到的 `revision` 作为 `after_revision`，并使用 `wait_ms=25000`。Runtime 内部可能因为 `captured_bytes/progress` 变化产生多个 revision；MCP server 会在**同一 25 秒总等待预算**内继续观察并合并这些中间 revision，优先把 terminal 或等待窗口结束时的单个观察点返回给 Codex。中间 revision 不会把总等待预算重置为新的 25 秒。
+
+如果等待窗口结束时仍没有新的可交付观察点且任务非终态，可返回最小无变化 envelope：
 
 ```json
 {
@@ -101,7 +103,7 @@ Controller token 的保密性仍依赖本机用户和目录 ACL。`doctor` 在 v
 }
 ```
 
-`unchanged=true` 只表示这个观察窗口里没有新的状态 revision。**它不表示 AGY、Gradle 或其他操作卡死，也不会触发自动取消。** 连续 unchanged 时调用方可以直接继续长轮询，不需要每轮先生成面向用户的解释；除非用户明确取消或既有总超时到达，否则仍等待实际进程终态。
+`unchanged=true` 只表示这个观察窗口里没有新的状态 revision。**它不表示 AGY、Gradle 或其他操作卡死，也不会触发自动取消。** 若一次调用仍返回非终态，调用方应直接继续 `agy_status`；不需要在两次 status 之间生成“我再等一轮”等面向用户的等待说明。除非用户明确取消或既有总超时到达，否则仍等待实际进程终态。
 
 终态 status 默认只返回决策摘要，包括 `summary`、真实 operation 退出码、错误/警告计数、termination reason、源码是否变化以及可追溯的 evidence/result artifact ID；不再默认展开 `errors[]`、`warnings[]` 和整份 `artifacts[]` metadata。需要细节时按需读取：
 
@@ -121,11 +123,11 @@ v0.3.2 的公开字节门槛是：unchanged status ≤256B、changed nonterminal
 req-<uuid4hex>
 ```
 
-例如 `req-7d3f1b3c0b1e4f91a8c7e2d4f6a9b123`。每个新的逻辑请求、每个新的续轮都使用新的 ID；**只有同一个逻辑请求的 transport/reconnect 重试才复用原 request_id**。同 ID 同内容返回已有 task，同 ID 不同内容返回 `idempotency_conflict`。历史 ID 不因任务终态或 Controller 重启而自动释放，本次不修改 SQLite schema。
+例如 `req-7d3f1b3c0b1e4f91a8c7e2d4f6a9b123`。每个新的逻辑请求、每个新的续轮都使用新的 ID；**只有同一个逻辑请求的 transport/reconnect 重试才复用原 request_id**。同 ID 同内容返回已有 task，同 ID 不同内容返回 `idempotency_conflict`。MCP 瘦请求在进入 Runtime 前会补齐固定内部安全默认值，因此正常省略隐藏字段不会改变内部 fingerprint。历史 ID 不因任务终态或 Controller 重启而自动释放，本次不修改 SQLite schema。
 
 `workspace_id` 是 `agy_capabilities` 返回的登记别名，不是文件路径。对于任何已登记 Git 仓库，可通过额外的 `workspace_path` 指向该仓库由 Git 正式登记的主工作树或分离 worktree。Runtime 会校验 worktree 根目录、Git common-dir 和 `git worktree list`；其他仓库、普通目录、仓库子目录及不存在路径都会拒绝。续会话绑定首次使用的实际路径，不能中途换 worktree。
 
-一般省略 `limits` 使用服务端默认值。当前 `summary_max_bytes` 范围为 2048～16384，`artifact_max_bytes` 范围为 1048576～536870912；越界错误会返回字段与上下限，并优先建议省略 `limits` 使用默认值；确需查看完整限制时读取 `agy://capabilities`。Codex MCP 注册的外层 `tool_timeout_sec` 为 60 秒；Controller status 单次 HTTP timeout 仍为 30 秒。若 long-poll 的第一次请求因 `controller_unavailable` 重连，第二次 status 保留 `task_id/after_revision` 但强制 `wait_ms=0`，避免重复消耗长等待预算。
+普通 MCP 一般完全省略 `limits`；只有任务确实需要超过默认 300 秒时才设置 `total_timeout_sec`。完整内部限制和默认值可通过冷资源 `agy://capabilities` 查看，但 `summary_max_bytes`、`artifact_max_bytes` 不再是普通 MCP 的可调输入。Codex MCP 注册的外层 `tool_timeout_sec` 为 60 秒；Controller status 单次 HTTP timeout 仍为 30 秒。若 Controller status 首次因 `controller_unavailable` 重连，既有 client 重连逻辑仍会把重试 `wait_ms` 置 0，避免重复消耗长等待预算。
 
 编译真实项目示例：
 
@@ -136,9 +138,9 @@ req-<uuid4hex>
   "workspace_path": "D:\\My_Elio\\life-archive-performance-verification",
   "kind": "build",
   "objective": "执行 Android 资源导出，只报告是否成功、错误原文和定位，不分析原因、不修改源码。",
-  "permissions": {"build": true, "log": true, "code_write": false},
+  "permissions": {"build": true, "log": true},
   "inputs": {"command_id": "life_android_resource"},
-  "limits": {"total_timeout_sec": 1200, "summary_max_bytes": 16384}
+  "limits": {"total_timeout_sec": 1200}
 }
 ```
 
@@ -158,7 +160,7 @@ req-<uuid4hex>
 {
   "request_id": "req-4be2a06d98f24c62a1d7e53f0b8c9a11", "workspace_id": "demo", "kind": "browser",
   "objective": "打开指定网页，读取标题与正文并保存截图，返回观察结果与证据引用。",
-  "permissions": {"browser": true,"origins": ["https://example.com"]},
+  "permissions": {"browser": true, "origins": ["https://example.com"]},
   "inputs": {"url": "https://example.com"}
 }
 ```
