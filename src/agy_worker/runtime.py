@@ -377,7 +377,7 @@ class Runtime:
             compact["diagnostics_artifact_id"]="errors"
         if compact["source_changed"]:
             changed=list(result.get("changed_files",[]))
-            compact["changed_files_count"]=len(changed)
+            compact["changed_files_count"]=int(result.get("changed_files_count",len(changed)))
             compact["changed_files_preview"]=changed[:PUBLIC_CHANGED_FILES_PREVIEW]
         return compact
 
@@ -761,6 +761,7 @@ class Runtime:
                     "workspace_path":str(c["source"]),
                     "input_snapshot":c["snapshot"],"agy":{"exit_code":process["exit_code"],"result_status":(terminal or {}).get("status"),"pid":process["pid"],"error":agy_error or None},
                     "operation":c["operation"],"source_changed":bool(changed),"changed_files":changed,
+                    "changed_files_count":len(changed),
                     "errors":extraction.get("errors",[])[:20],"warnings":extraction.get("warnings",[])[:20],
                     "total_errors":len(extraction.get("errors",[])),"total_warnings":len(extraction.get("warnings",[])),
                     "termination_reason":reason or ("protocol_error" if not terminal else None),
