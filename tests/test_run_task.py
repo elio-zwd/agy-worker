@@ -93,6 +93,28 @@ def make_args(tmp_path, config, *, keep_controller=False):
     )
 
 
+def test_tool_result_value_prefers_structured_content():
+    module = load_run_task_module()
+    structured={"task_id":"task-1","status":"running","revision":5}
+    response=SimpleNamespace(
+        structured_content=structured,
+        content=[SimpleNamespace(type="text",text="agy_worker: running；task=task-1")],
+    )
+
+    assert module.tool_result_value(response)==structured
+
+
+def test_tool_result_value_falls_back_to_legacy_json_text():
+    module = load_run_task_module()
+    legacy={"task_id":"task-legacy","status":"queued","revision":1}
+    response=SimpleNamespace(
+        structured_content=None,
+        content=[SimpleNamespace(type="text",text=json.dumps(legacy,ensure_ascii=False))],
+    )
+
+    assert module.tool_result_value(response)==legacy
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Runtime 基线使用 Windows msvcrt 锁")
 def test_custom_config_cleans_controller_started_by_this_run(tmp_path, monkeypatch):
     module = load_run_task_module()
