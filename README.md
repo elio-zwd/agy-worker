@@ -125,7 +125,7 @@ req-<uuid4hex>
 
 `workspace_id` 是 `agy_capabilities` 返回的登记别名，不是文件路径。对于任何已登记 Git 仓库，可通过额外的 `workspace_path` 指向该仓库由 Git 正式登记的主工作树或分离 worktree。Runtime 会校验 worktree 根目录、Git common-dir 和 `git worktree list`；其他仓库、普通目录、仓库子目录及不存在路径都会拒绝。续会话绑定首次使用的实际路径，不能中途换 worktree。
 
-一般省略 `limits` 使用服务端默认值。当前 `summary_max_bytes` 范围为 2048～16384，`artifact_max_bytes` 范围为 1048576～536870912；越界错误会返回字段、上下限和调用 `agy_capabilities` 的提示。Codex MCP 注册的外层 `tool_timeout_sec` 为 60 秒；Controller status 单次 HTTP timeout 仍为 30 秒。若 long-poll 的第一次请求因 `controller_unavailable` 重连，第二次 status 保留 `task_id/after_revision` 但强制 `wait_ms=0`，避免重复消耗长等待预算。
+一般省略 `limits` 使用服务端默认值。当前 `summary_max_bytes` 范围为 2048～16384，`artifact_max_bytes` 范围为 1048576～536870912；越界错误会返回字段与上下限，并优先建议省略 `limits` 使用默认值；确需查看完整限制时读取 `agy://capabilities`。Codex MCP 注册的外层 `tool_timeout_sec` 为 60 秒；Controller status 单次 HTTP timeout 仍为 30 秒。若 long-poll 的第一次请求因 `controller_unavailable` 重连，第二次 status 保留 `task_id/after_revision` 但强制 `wait_ms=0`，避免重复消耗长等待预算。
 
 编译真实项目示例：
 
@@ -158,7 +158,7 @@ req-<uuid4hex>
 {
   "request_id": "req-4be2a06d98f24c62a1d7e53f0b8c9a11", "workspace_id": "demo", "kind": "browser",
   "objective": "打开指定网页，读取标题与正文并保存截图，返回观察结果与证据引用。",
-  "permissions": {"browser": true, "origins": ["https://example.com"]},
+  "permissions": {"browser": true,"origins": ["https://example.com"]},
   "inputs": {"url": "https://example.com"}
 }
 ```
