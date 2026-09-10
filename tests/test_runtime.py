@@ -268,6 +268,24 @@ def test_source_changed_count_survives_record_preview_truncation(runtime):
     assert compact['changed_files_preview']==preview
 
 
+def test_public_runtime_error_is_utf8_bounded(runtime):
+    state=runtime.submit(request(request_id='req-runtime-error-budget'))
+    context=runtime.active[state['task_id']]
+    original_message='错'*1500
+    context['record'].update(status='failed',error={'code':'runtime_error','message':original_message})
+    runtime._save(context['record'])
+
+    public=runtime.status(state['task_id'],wait_ms=0)
+    encoded=json.dumps(public,ensure_ascii=False,separators=(',',':')).encode('utf-8')
+
+    assert public['error']['code']=='runtime_error'
+    assert public['error']['message']
+    assert len(public['error']['message'].encode('utf-8'))<=1024
+    assert len(encoded)<=2048
+    persisted=json.loads(runtime.db.execute('SELECT record FROM tasks WHERE id=?',(state['task_id'],)).fetchone()[0])
+    assert persisted['error']['message']==original_message
+
+
 def test_terminal_status_wins_over_same_after_revision(runtime):
     state=runtime.submit(request(request_id='req-terminal-same-rev'))
     context=runtime.active[state['task_id']]
