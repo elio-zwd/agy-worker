@@ -25,6 +25,12 @@ def load_verify_controller_module():
     return module
 
 
+def test_verify_controller_targets_v032():
+    module = load_verify_controller_module()
+
+    assert module.EXPECTED_VERSION == "0.3.2"
+
+
 def make_config(tmp_path):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
