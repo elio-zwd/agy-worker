@@ -19,7 +19,8 @@ mcp_hot_path_red_head: 7d8594ea16b18d261f07a4fcaba4442e0d7bf0fa
 mcp_hot_path_initial_code_head: ec69cde0ebb1f3c2870f2af1cbaa53c31198f7b6
 mcp_limits_hint_red_head: addb466f0ee3b542fbe7d7ba7a77e39f0626c78c
 mcp_hot_path_code_head: 70577e68e9843b187feeda9080d5ce976c19fbe4
-mcp_hot_path_docs_head: 5708d778ee5231f07be3b0bcd30c27d60b0fe34a
+mcp_hot_path_recheck_protocol_head: 5708d778ee5231f07be3b0bcd30c27d60b0fe34a
+mcp_hot_path_readme_head: 7802bce283e2e9cd16fce611acf6cbbd7df467ee
 package: 0.3.2
 controller_protocol: 2
 mcp_tool_count: 6
@@ -61,7 +62,7 @@ open_pr: "#2_draft"
 - [x] T19 MCP 调用提示瘦身：已知 workspace/command 时直接 `agy_worker`；未知时才调用一次 `agy_capabilities`；不要仅为定位 AGY/MCP 先跑 git branch/log、`rg AGY`、`agy --help`。`agy_status` 对 queued/running 推荐 `after_revision + wait_ms=25000`，unchanged 静默继续。
 - [x] T20 兼容性自审：保留 `agy_worker` description 中 direct `agy.exe`、MCP unavailable、chat/thread/subagent 防绕过语义；不改六工具、schema、Runtime、Controller、权限。
 - [x] T20.1 发现冷热提示矛盾：热 `agy_capabilities` 不再含 limits 后，参数校验旧提示“调用 agy_capabilities 获取当前限制”会误导。先更新行为测试：`addb466f0ee3b542fbe7d7ba7a77e39f0626c78c`；再把提示改成“优先省略 limits；需要完整限制读取 `agy://capabilities`”。当前生产代码 target：`70577e68e9843b187feeda9080d5ce976c19fbe4`。ChatGPT Web 未执行 Windows RED/GREEN，不声称测试通过。
-- [x] T21 README / 本地复验协议同步；当前协议 `LOCAL-ROUTING-RECHECK.md` 固定生产 target 为 `70577e68...`，并明确本轮不修改任何 Agents。
+- [x] T21 README / 本地复验协议同步：协议 `5708d778...`；README 最新修正 `7802bce...`。本轮明确不修改任何 Agents。
 - [ ] T22 当前 HEAD Windows 全量回归：`scripts/check.ps1` 必须 exit `0`、0 failed；`git diff --check` exit `0`。
 - [ ] T23 真实 MCP 热路径：新 Codex 会话使用业务项目现有“AGY是MCP”规则，发送“使用AGY跑编译测试”；记录是否还有无意义 AGY-discovery shell、capabilities 实际字段、status 调用参数/叙述。
 - [ ] T24 capabilities 冷热验收：真实 `agy_capabilities` 顶层只应有 `schema_version/workspaces`；不得再返回 `controller`、`limits`、`permissions`、`git`、`supports_worktrees`、`usage`；需要诊断时 `agy://capabilities` / `agy://workspaces` 仍应完整。
