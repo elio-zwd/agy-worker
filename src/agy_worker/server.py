@@ -16,7 +16,7 @@ TOOL_TEXT_MAX_BYTES = 256
 
 TOOLS = {
     "agy_capabilities": (CapabilitiesRequest, "仅在 workspace_id 或 command_id 未知时调用，返回紧凑路由表；已知映射直接调用 agy_worker。完整 limits、Controller、权限和工作区诊断按需读取 agy://capabilities 或 agy://workspaces。"),
-    "agy_worker": (WorkerRequest, "提交 AGY 任务并立即返回 task_id。AGY/agy 在支持任务中指本机 MCP，不是聊天/线程/CLI。已知 workspace_id 与 command_id 时直接调用；不要为定位 AGY 或调用入口先跑 git status/branch/log、rg AGY、agy --help 等探测。编译只执行并采集错误，不分析或修改源码。"),
+    "agy_worker": (WorkerRequest, "提交 AGY 任务并立即返回 task_id。AGY/agy 在支持任务中指本机 MCP，不是聊天、线程、agent 或 subagent；不得直接运行 agy/agy.exe，MCP 不可用时明确报告。已知 workspace_id 与 command_id 时直接调用，不要为定位 AGY 或调用入口先跑 git status/branch/log、rg AGY、agy --help 等探测。编译只执行并采集错误，不分析或修改源码。"),
     "agy_continue": (ContinueRequest, "续接已完成的 AGY 会话并启动新进程；给 expected_turn 与本轮完整权限，新逻辑续轮使用新的 req-<uuid4hex>。"),
     "agy_status": (StatusRequest, "等待或查询任务状态。queued/running 时优先传上次 revision 为 after_revision，并用 wait_ms=25000 长轮询；unchanged 只表示本窗口无新 revision，应静默继续等待，不要逐次向用户解释。"),
     "agy_cancel": (CancelRequest, "取消排队/运行任务；重复取消不会影响其他任务。"),
@@ -88,7 +88,7 @@ def validation_body(error):
         messages.append(message)
         details.append({"field":field,"rule":issue["type"],**context})
     return {"error":"invalid_request","message":"；".join(messages),"details":details,
-            "hint":"仅在 workspace_id、command_id 或限制未知时调用 agy_capabilities。"}
+            "hint":"先调用 agy_capabilities 获取当前限制和可用工作区。"}
 
 
 def build_server(client):
