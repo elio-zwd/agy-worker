@@ -30,6 +30,7 @@ TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "interrupted"}
 MAX_CONCURRENT_TASKS = 1
 MAX_INFLIGHT_TASKS = 16
 PUBLIC_SUMMARY_MAX_BYTES = 768
+PUBLIC_ERROR_MESSAGE_MAX_BYTES = 1024
 PUBLIC_CHANGED_FILES_PREVIEW = 5
 READ_BROWSER = {"list_pages", "new_page", "navigate_page", "take_snapshot", "take_screenshot",
                 "list_console_messages", "get_console_message", "list_network_requests", "get_network_request", "wait_for"}
@@ -386,8 +387,14 @@ class Runtime:
         if unchanged:
             return {"task_id":record["task_id"],"status":record["status"],
                     "revision":record["revision"],"unchanged":True}
-        keys=("task_id","session_id","turn","status","revision","progress","error")
+        keys=("task_id","session_id","turn","status","revision","progress")
         result={key:record[key] for key in keys if key in record}
+        if "error" in record:
+            error=record["error"]
+            result["error"]={
+                "code":error.get("code","runtime_error"),
+                "message":_truncate_utf8(error.get("message",""),PUBLIC_ERROR_MESSAGE_MAX_BYTES),
+            }
         if "result" in record:
             result["result"]=self._public_result(record["result"])
         return result
