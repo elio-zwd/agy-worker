@@ -14,27 +14,34 @@
 ```text
 base: 904b75a6e7b9d0b75c0ae8f63924c3ed0acf5066
 branch: fix/controller-hardening-v031
-phase: final_remote_review_complete_waiting_local_acceptance
+validated executable head: b00a5a8853336c345fc186bb9049c44931f19149
+phase: final_acceptance_passed_ready_for_draft_pr
 production code changed: yes
 user approval to start production implementation: approved_2026-09-09
-final Windows acceptance for current HEAD: pending
-open PR: none
+final Windows acceptance: PASS
+full repository check: 77 passed, 0 failed, 0 skipped, 0 warnings
+remote spec/code-quality review: no open Critical/Important
+open PR: pending Draft creation
 merge authorized: false
 ```
 
-用户已确认 SPEC / PLAN 并授权在独立分支连续开发。T1～T9 的计划范围已经写入远端分支，随后又执行了独立规格复核和代码质量复核；审查中发现的 ACL 字段漂移、`--fresh` 对不可达旧 state 的误判，以及 WMI 重试共用环境文件的竞态，均已在分支上追加回归测试和修正。
+用户已确认 SPEC / PLAN 并授权在独立分支连续开发。第一次 Final Acceptance 暴露 signal thread、stop/state race、Windows venv WMI ownership、shared pending 测试稳定性和 trailing whitespace 等问题；这些 finding 经 `receiving-code-review` 技术复核后完成 remediation。
 
-**这不等于最终运行验证已通过。** 当前 ChatGPT Web 没有本地 Windows test runner，仓库也没有可替代本地验收的 GitHub Actions。最终树必须由本地 AI 按 `LOCAL-ACCEPTANCE.md` 一次性执行定向 pytest、`scripts/check.ps1`、fresh 双 Bridge/WMI 生命周期、custom-config ownership、ACL doctor 和 `git diff --check`。只有拿到这些新鲜证据后，才能进入最终验收记录和 Draft PR 阶段。
+第二次完整 Windows Final Acceptance 在精确代码/测试 HEAD `b00a5a8853336c345fc186bb9049c44931f19149` 上执行并返回 PASS：`scripts/check.ps1` exit 0、77/77 pytest，通过真实 WMI ownership、fresh 双 Bridge lifecycle、custom-config no-leak / pre-existing preservation / `--keep-controller`、ACL advisory 和两个 `git diff --check`。
 
-## 计划自审结论
+后续 `TASKS.md` / `docs/部署验收.md` 等提交只记录验收状态，不修改生产代码、测试、脚本或依赖。执行证据仍明确绑定 `b00a5a8...`，不能说文档记录提交之后又重新执行过 Windows 测试。
 
-规划阶段按 Superpowers `writing-plans` / plan reviewer 的 Completeness、Spec Alignment、Task Decomposition、Buildability 做过自审。远端最终审查再次逐项覆盖：
+## 最终审查结论
+
+规划阶段按 Superpowers `writing-plans` / plan reviewer 的 Completeness、Spec Alignment、Task Decomposition、Buildability 做过自审。开发完成后又按 Web Adapter 分成独立的规格复核与代码质量复核，最终覆盖：
 
 - stale config / stale implementation；
 - protocol v2 与旧 Controller 显式 stop；
+- stop 等待 state 真正消失与 replacement 防误停；
 - custom `run-task --config` Controller ownership / cleanup；
-- launch lock takeover、retry cooldown、WMI PID ownership；
-- state endpoint fail-closed；
+- launch lock takeover、retry cooldown、shared pending PID；
+- Windows venv launcher PID 与 Controller 后代 ownership；
+- state endpoint fail-closed 与 authenticated health object validation；
 - `controller_data_acl` advisory；
 - status reconnect timeout budget；
 - 单执行槽 + 16 inflight backpressure；
@@ -42,35 +49,70 @@ merge authorized: false
 - request_id 全 data_dir 历史唯一语义；
 - `jsonschema==4.26.0` 正式依赖和 package/server `0.3.1` 单一版本来源；
 - “维护者辅助清洗流程”不是 Runtime analysis mode；
-- fresh 双 Bridge 生命周期与 same-instance stop；
-- 完成前 spec review / code-quality review / local acceptance / Git diff review。
+- fresh 双 Bridge lifecycle 与 same-instance stop；
+- 完成前 full check / diff-check / local acceptance / 最终远端复核。
 
-## 已保留的两项验收修正
+远端最终审查没有开放的 Critical / Important finding。
 
-### R1 — editable metadata 必须刷新
+## 最终 Windows 证据摘要
 
-最终验收先执行：
+```text
+OS: Windows 10 Pro 19045 x64
+PowerShell: 7.6.5
+Python: 3.13.9
+Package metadata: 0.3.1
 
-```powershell
-& ./.venv/Scripts/python.exe -m pip install --no-deps --no-build-isolation -e .
-& ./.venv/Scripts/python.exe -c "import importlib.metadata as m; print(m.version('elio-agy-worker'))"
+scripts/check.ps1:
+  exit 0
+  compileall successful
+  77 passed in 37.92s
+  failed=0
+  skipped=0
+  warnings=0
+
+verify-controller.py --fresh --stop-after:
+  exit 0
+  two Bridges: 6 tools each
+  protocol=2
+  controller remains alive after Bridges
+  max_concurrent_tasks=1
+  max_inflight_tasks=16
+  same-instance stop=true
+  verification_passed=true
+  final state absent
+
+Windows venv ownership:
+  launcher PID != Controller PID accepted
+  started_controller=true
+  started_instance_id == state.instance_id
+  no residual state/process
+
+Git integrity:
+  fixed-base diff-check exit 0
+  origin/main...HEAD diff-check exit 0
+  tracked status clean
 ```
 
-期望 metadata 为 `0.3.1`，避免旧 editable `.dist-info` 让 server version 测试产生假结论。
+## ACL advisory
 
-### R2 — custom run-task no-leak 不依赖 AGY 登录
+最终 doctor：`controller_data_acl.checked=true`，检测到 `NT AUTHORITY\Authenticated Users` 与 `BUILTIN\Users` broad read，`token_confidentiality_advisory=true`，同时 `os_isolation=false`。
 
-`LOCAL-ACCEPTANCE.md` 使用不存在的 `workspace_id` 让请求在 Runtime 前置校验阶段稳定拒绝。这样可以真实启动/复用 Controller 并验证 cleanup，却不会调用 AGY；业务请求非零退出是该探针的预期，lifecycle 结论只看 state/instance ownership。
+这仍然只是设计允许的 advisory：不自动写 ACL，不把当前系统描述成 Windows sandbox 或完整 effective-access 隔离。
 
 ## 当前门禁
 
 ```text
-远端最终 HEAD 锁定
-→ 本地 AI 按 LOCAL-ACCEPTANCE.md 一次性执行最终 Windows 验收
-→ ChatGPT 按 receiving-code-review 技术复核每条证据/失败
-→ 若存在缺陷：新增回归测试并修复，再重新验收最终树
-→ 若全部必要证据通过：更新 TASKS.md / docs/部署验收.md
-→ 再进入 finishing-a-development-branch 的 PR/集成决策
+第二次完整 Final Acceptance PASS
+→ ChatGPT receiving-code-review 技术复核 PASS 证据
+→ TASKS.md / docs/部署验收.md 回填真实结果
+→ verification-before-completion 核对证据边界
+→ 创建 Draft PR
+→ 保留 feature branch
+→ 不 merge；最终 merge 由用户决定
 ```
+
+## 未验证 / 不在本次范围
+
+本轮 Controller hardening 最终验收没有重新执行真实 AGY 业务任务、HBuilderX、Android/ADB/真机或真实 browser 业务流。这些不属于本次必要通过条件，不能写成此次已验证。
 
 未经用户明确授权，不合并 `main`、不删除分支、不启用自动合并、不强制推送。
