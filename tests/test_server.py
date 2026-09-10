@@ -51,7 +51,8 @@ def test_limit_validation_is_actionable():
         body=validation_body(error)
     assert 'summary_max_bytes 最大为 16384' in body['message']
     assert 'artifact_max_bytes 最小为 1048576' in body['message']
-    assert body['hint'].startswith('先调用 agy_capabilities')
+    assert '省略 limits' in body['hint']
+    assert 'agy://capabilities' in body['hint']
 
 
 def test_status_uses_short_text_and_canonical_structured_content(monkeypatch):
