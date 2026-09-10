@@ -15,7 +15,9 @@ AGY Worker 的初衷是让 AGY 处理编译、日志、浏览器、图片等高�
 4. `after_revision` 当前只控制“等多久”，没有表达“本轮等待结束但没有新 revision”的紧凑语义；
 5. 长时间没有 stdout 变化并不代表构建卡死。真实记录中任务已经进入 `generateDebugLintReportModel`，却因为一段时间没有新增日志被误判为疑似卡住并主动取消。
 
-这不是单纯的“summary_max_bytes 太大”。根因是 **热路径状态、冷路径证据和 MCP 表示层没有彻底分层**。
+后续真实 Codex 复验又暴露出第二层问题：即使单次 MCP status 已能合并 progress revision，公开策略仍固定要求 25 秒，因此长编译会迫使 Codex 周期性重新发起 status 调用。用户最终确认把公开等待改为默认 50 秒，并允许 Codex 根据预计任务耗时自主选择 50～600 秒；MCP 内部继续使用最多 25 秒的 Controller long-poll 分片。
+
+这不是单纯的“summary_max_bytes 太大”。根因是 **热路径状态、冷路径证据和 MCP 表示层没有彻底分层，同时上层等待预算与内部 Controller 单段等待没有分层**。
 
 ## 2. 根因
 
@@ -47,9 +49,15 @@ v0.3.1 的 `Runtime._run()` result 同时包含：
 
 但同一任务已经存在 `result`、`errors`、`operation-log` 等 artifact，可通过 `agy_artifact_read` 显式读取。把这些冷数据默认展开到 status 是职责重叠。
 
+### 2.4 固定 25 秒公开等待放大 Codex tool round-trip
+
+Runtime 的 progress revision 需要继续保存用于审计，本轮不应靠删除或节流这些事实来省 token。真正应该收缩的是 Codex 可见的 status 调用次数。若 MCP 公开等待也被限制为 25 秒，即使 server 能在一次调用内吞掉中间 revision，持续几十秒或数分钟的 build/test 仍会周期性返回 Codex，再由模型重新发起下一次 status。
+
+因此公开等待预算必须与 Controller 内部单段等待分离：Codex 决定“一次愿意等多久”，MCP Server 负责在该总预算内多次调用现有短 long-poll。
+
 ## 3. 目标
 
-v0.3.2 的目标是：**让 Codex 默认只接收“下一步决策所需信息”，完整事实与证据继续可靠保存在 artifact 中，需要时再按证据 ID 读取。**
+v0.3.2 的目标是：**让 Codex 默认只接收“下一步决策所需信息”，完整事实与证据继续可靠保存在 artifact 中，需要时再按证据 ID 读取；同时让长任务的一次 status 等待尽量停留在 MCP 内部，不要求 GPT 每 25 秒参与。**
 
 必须达到：
 
@@ -59,19 +67,22 @@ v0.3.2 的目标是：**让 Codex 默认只接收“下一步决策所需信息�
 - 失败仍必须保留错误数量、命令退出码、termination reason 和可追溯 evidence ID，不能为了省 token 丢失可诊断性；
 - `agy_artifact_read` 继续作为显式高信息量/高 token 成本的冷路径读取入口；
 - 不把“无 stdout 更新”定义为 hung/stalled；任务终态仍只由 Runtime 的进程、取消、超时和业务验证规则决定；
+- `agy_status` 公开默认总等待 50 秒，Codex 可自主选择 50～600 秒；AGY 提前进入 terminal 时立即返回，不能把预算当固定 sleep；
+- Controller/Runtime 内部单段 status 继续最多 25 秒，MCP 在一个公开 deadline 内分片，不因 progress revision 重置总预算；
 - 不改变单 Runtime、单执行槽、权限、快照、Controller stale/stop、request_id 幂等语义。
 
 ## 4. 非目标
 
 本阶段不做：
 
-- 不增加 webhook、push notification 或后台主动向 Codex 发消息；
+- 不增加 webhook、push notification、MCP Tasks subscription 或后台主动向 Codex 发消息；本轮的“完成即继续”来自一个仍挂起的 MCP tool call 在 terminal 时返回；
 - 不把 `agy_worker` 改回同步阻塞直到任务完成；
 - 不改变 `MAX_CONCURRENT_TASKS=1` 或 `MAX_INFLIGHT_TASKS=16`；
 - 不扩大 shell、code_write、浏览器或 Android 权限；
-- 不改变 `summary_max_bytes` 的 2048～16384 现有输入范围；
-- 不在 v0.3.2 首轮引入 progress 节流。先解决已证实的重复表示、无变化返回和终态热/冷数据混合，再根据真实 token 数据决定是否需要减少 progress revision 频率；
-- 不因为状态压缩而删除本地 artifact、hash、审计或完整 result 证据。
+- 不改变 `summary_max_bytes` 的内部安全预算；
+- 不在 v0.3.2 首轮引入 Runtime progress 节流；完整 progress/revision 继续保存，MCP 层负责 coalesce；
+- 不因为状态压缩而删除本地 artifact、hash、审计或完整 result 证据；
+- 不把 Controller HTTP timeout 或内部 `StatusRequest.wait_ms` 扩大到 600 秒。
 
 ## 5. 设计决定
 
@@ -201,7 +212,7 @@ PUBLIC_CHANGED_FILE_MAX_BYTES = 128
 目标例：
 
 ```text
-agy_status: running rev=5；无变化
+agy_status: running rev=5；继续轮询，无需用户消息
 agy_status: succeeded rev=35；操作成功，日志采集完成。
 agy_worker: queued rev=1；task=task-...
 ```
@@ -226,14 +237,39 @@ v0.3.2 不删除以下 artifact：
 
 `result_artifact_id="result"` 是默认 drill-down 入口。build/test 若只需错误/警告结构，优先读 `diagnostics_artifact_id="errors"`；若需原始定位上下文，再读 `operation-log` 指定行。
 
+### 5.8 自适应 MCP status 总等待
+
+公开模型与内部模型分离：
+
+```python
+class McpStatusRequest(Strict):
+    task_id: str
+    after_revision: int | None = None
+    wait_ms: int = Field(50000, ge=50000, le=600000)
+
+class StatusRequest(Strict):
+    task_id: str
+    after_revision: int | None = None
+    wait_ms: int = Field(0, ge=0, le=25000)
+```
+
+无 `after_revision` 时，MCP 不存在“等待下一 revision”的基线，因此只调用一次内部 `wait_ms=0` 快照。已有 revision 时，公开预算以单一 monotonic deadline 计算，每次 Controller 调用只取剩余时间与 25000ms 的较小值。任何 progress revision、unchanged 都不得把 deadline 重新设置为新的 50～600 秒；terminal 一出现就立即结束本次 MCP 调用。
+
+Codex 可以省略 `wait_ms` 走 50 秒默认，也可以根据构建预计耗时选择更长值；不要求用固定档位。总预算结束仍非终态时直接下一次 `agy_status`，不得在两次 tool call 之间添加面向用户的等待叙述。
+
+为了让 600 秒合法等待不被 Codex MCP 宿主的旧 60 秒工具超时截断，`manage.register()` 写入 `tool_timeout_sec=660`。这个值只扩大宿主允许工具调用存活的上限，不扩大 `agy_status` 公开最大值，也不修改 Controller HTTP timeout。
+
 ## 6. 协议与版本
 
 - 目标包版本：`0.3.2`；
 - MCP 工具数量保持 6，不新增工具；
-- `StatusRequest` 输入字段保持 `task_id / after_revision / wait_ms`，因此不需要新增公开输入字段；
-- `schemas/agy_status.json` 等输入 schema 不因本规格新增字段；实现完成时必须确认无意外 schema diff；
-- Controller `/control/call` 内部协议继续 `PROTOCOL_VERSION=2`。本次没有改变 IPC request framing、鉴权或方法集合；Runtime 实现摘要与 package version 已能让旧/新实现 fail-closed，不为只改变公开结果视图机械升级 protocol v3；
-- README 与 `docs/实施设计.md` 必须明确 v0.3.2 的 compact status 语义。
+- `agy_status` 对外仍只有 `task_id / after_revision / wait_ms` 三个字段，但模型由内部 `StatusRequest` 分离为公开 `McpStatusRequest`；
+- `schemas/agy_status.json` 必须反映公开合同：`wait_ms` default 50000、minimum 50000、maximum 600000；Controller/Runtime 内部 `StatusRequest` 继续 0..25000；
+- `manage.schemas()` 必须从 `McpStatusRequest` 生成公开 status schema，避免 regeneration 把内部 25 秒模型泄回外部；
+- Codex 注册的 `tool_timeout_sec` 为 660；升级后需要重新执行注册入口才会写入现有本机配置；
+- Controller `/control/call` 内部协议继续 `PROTOCOL_VERSION=2`。本次没有改变 IPC request framing、鉴权或方法集合；Runtime 实现摘要与 package version 已能让旧/新实现 fail-closed，不为只改变 MCP 外部等待策略机械升级 protocol v3；
+- README 与 `docs/实施设计.md` 必须明确 v0.3.2 的 compact status 与自适应等待语义；
+- 不将挂起 tool call 的 terminal 返回描述为 webhook/push notification。
 
 ## 7. 可量化验收标准
 
@@ -255,12 +291,20 @@ v0.3.2 不删除以下 artifact：
 4. terminal status 保留 exit code、error/warning counts、termination reason、source-changed flag 和 evidence/result artifact ID，并且不返回 stale `progress`；
 5. source-changed 终态在超长多字节路径下仍满足预算；preview 最多 5 个、每个最多 128 UTF-8 bytes，完整路径不从持久证据删除；
 6. Runtime 自身异常的公开 `error.message` 按 UTF-8 有界，不能突破其他 terminal 2048B 上限，持久 error 仍保留原文；
-7. status reconnect 第二次 `wait_ms=0` 的 v0.3.1 合同继续通过；
+7. status reconnect 第二次内部 `wait_ms=0` 的 v0.3.1 合同继续通过；
 8. cancellation、request_id 幂等、16 inflight、Controller stale/stop 等既有测试不得因本次返回视图改变而失效；
 9. `scripts/run-task.py` 必须优先消费 canonical `structured_content`，同时兼容旧 server 的 JSON TextContent；
-10. `scripts/check.ps1` 最终必须 exit 0；
-11. 本地 AI 必须用真实 AGY 至少执行一次会产生 warnings 的 build/test，记录各次 `agy_status` 的实际返回字节数，并验证 Codex 侧不再出现同一完整 JSON 双份；
-12. 真实任务期间若出现无 revision 增长的 long-poll 窗口，只能得到 compact `unchanged`，不能因此自动 cancel；最终状态由实际进程终态决定。若目标构建持续输出导致自然窗口未出现，应记录 `not_observed`，不得伪造。
+10. 公开 `agy_status` list_tools/schema 必须显示 wait_ms default 50000 / min 50000 / max 600000；49999 与 600001 在进入 Controller 前被拒绝；
+11. 省略 `wait_ms` 且已有 `after_revision` 时使用 50 秒总预算；内部每段 Controller status <=25000ms；progress revision 不能重置总 deadline；
+12. 公开选择 600000ms 时，内部仍 <=25000ms；如果第二个内部观察点已 terminal，则不得继续内部轮询或等待满 600 秒；
+13. 无 `after_revision` 时必须只取一次内部 `wait_ms=0` 当前快照；
+14. `manage.schemas()` 再生成后的 `agy_status.json` 与 tracked 公开 schema 一致；
+15. `manage.register()` 生成的 `mcp_servers.agy_worker.tool_timeout_sec` 必须大于 600 秒，目标值 660；
+16. `scripts/check.ps1` 最终必须 exit 0；
+17. 本地 AI 必须用真实 AGY 至少执行一次 build/test，记录 Codex 可见 `agy_status` 调用与公开 wait 参数，并验证中间 progress 不再逐 revision 回到 Codex；
+18. 真实任务期间若出现无 revision 增长的 long-poll 窗口，只能得到 compact `unchanged`，不能因此自动 cancel；最终状态由实际进程终态决定。若目标构建持续输出导致自然窗口未出现，应记录 `not_observed`，不得伪造；
+19. 对一个选用较长等待预算的真实 status，必须确认 terminal 到达后调用提前返回，而不是等待满配置预算；
+20. 真实复验前重新执行 `scripts/register.ps1`，核对 `tool_timeout_sec=660` 且用户既有 developer instructions 没有被覆盖。
 
 ## 8. 兼容与风险
 
@@ -278,22 +322,33 @@ v0.3.2 不删除以下 artifact：
 
 处理：这是本次有意的公开行为收缩。README 明确迁移方式：先根据 totals/evidence 判断，再使用 `agy_artifact_read` 读取 `errors`、`operation-log` 或 `result`。不添加 `verbose=true` 兼容开关，避免调用者继续把冷数据默认塞回模型上下文。
 
-### 8.3 不能把“少日志”当停滞
+### 8.3 不能把“少日志”或长等待当停滞
 
-Runtime 不新增基于 captured_bytes 静默时长的自动取消。`wait_ms` 到期只表示“观察窗口内状态 revision 未改变”，不是 hang detector。
+Runtime 不新增基于 captured_bytes 静默时长的自动取消。内部 25 秒 long-poll 或公开 50～600 秒总等待预算到期都只表示一次观察窗口结束，不是 hang detector。
+
+公开长等待不是 sleep：如果 AGY 在所选预算内提前 terminal，MCP 必须马上返回。相反，如果预算到期仍非终态，Codex 应直接发起下一次 status，不向用户插入“我再等一轮”等消息。
+
+### 8.4 Codex 宿主工具超时
+
+风险：合法 `wait_ms=600000` 大于旧注册 `tool_timeout_sec=60`，宿主会先于 Worker 结束调用。
+
+处理：`manage.register()` 把该 MCP 的 `tool_timeout_sec` 提高到 660 秒，并要求升级后重新注册。该改变只影响宿主工具调用上限，不改变 Controller/Runtime 任务超时、安全边界或单段 long-poll。
 
 ## 9. 实施文件边界
 
-核心生产修改限制在：
+原 v0.3.2 compact result 核心生产修改包括：
 
 - `src/agy_worker/runtime.py`：compact task/result view + unchanged long-poll；
-- `src/agy_worker/server.py`：MCP 表示层去重与短文本摘要；
+- `src/agy_worker/server.py`：MCP 表示层去重、短文本摘要与外部总等待 coalescing；
+- `src/agy_worker/models.py`：MCP 外部 `McpStatusRequest` 与内部 `StatusRequest` 分层；
+- `src/agy_worker/manage.py`：公开 schema 生成模型与 Codex MCP tool timeout 注册；
 - `pyproject.toml`：版本 `0.3.2`；
 - `tests/test_runtime.py`：status/terminal payload/证据回归；
-- `tests/test_server.py`：CallToolResult 双通道去重测试；
+- `tests/test_server.py`、`tests/test_mcp_hot_path.py`：CallToolResult、公开 status schema/边界、内部分片、deadline 与 terminal 提前返回；
+- `tests/test_manage.py`：status schema regeneration 与 Codex host timeout；
 - `tests/test_controller_reconnect.py`：只在既有断线语义因返回形状需要断言调整时最小修改；
 - `README.md`、`docs/实施设计.md`：公开合同与迁移说明；
-- `schemas/*.json`：只允许由模型重新生成后产生的必要差异；若输入模型没变，预期无 schema diff。
+- `schemas/agy_status.json`：由 `McpStatusRequest` 生成的必要公开 schema 差异。
 
 ### 9.1 实施中代码质量审查发现的必要配套范围
 
@@ -306,16 +361,17 @@ Runtime 不新增基于 captured_bytes 静默时长的自动取消。`wait_ms` �
 
 这四个文件是实现中发现的**兼容/版本维护必要项**，不是功能扩张。它们不改变 Controller lifecycle、协议、权限、Broker、Browser、数据库或执行槽语义。
 
-除上述明确范围外，不借机重构 Controller、Broker、Browser、Artifacts、权限或数据库 schema。
+本轮自适应 status 等待不借机修改 Runtime progress 记录、Controller lifecycle、Broker、Browser、Artifacts、权限或数据库 schema，也不修改任何 `AGENTS.md`。
 
 ## 10. 完成定义
 
 只有以下条件全部满足才能把 v0.3.2 描述为完成：
 
-- 计划中的 RED/GREEN 回归真实执行；
-- 最终 `scripts/check.ps1` 与 `git diff --check` 有新鲜证据；
+- 计划中的 RED/GREEN 回归有真实执行证据；ChatGPT Web 只负责先写测试，不能把未执行测试描述为 PASS；
+- 最终 `scripts/check.ps1` 与 `git diff --check` 有新鲜 Windows 证据；
+- 公开 status schema、schema regeneration、内部 <=25 秒分片、660 秒 Codex host timeout 都有本地验证；
 - PR diff 只包含本规格 §9 / §9.1 范围及 planning/acceptance 文档；
 - 规格审查与代码质量审查无开放 Critical / Important finding；
-- 本地 AI 的真实 Windows + AGY token/字节验收完成，并由 ChatGPT 按 `receiving-code-review` 复核证据；
+- 本地 AI 的真实 Windows + AGY/Codex 复验完成，并由 ChatGPT 按 `receiving-code-review` 复核证据；
 - `TASKS.md` 回填精确 validated HEAD 与各项证据；
 - 未经用户明确授权，不 merge `main`、不删除分支、不启用自动合并。
