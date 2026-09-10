@@ -168,7 +168,10 @@ def test_worker_and_continue_schemas_hide_unavailable_permissions_and_cold_limit
     """模型不应被公开 schema 诱导去填写 Runtime 永远拒绝或热路径无需调整的字段。"""
     handlers=capture_server(monkeypatch,RecordingClient())
     result=list_tools(handlers)
-    schemas={tool.name:tool.inputSchema for tool in result.tools}
+    schemas={
+        tool.name:tool.model_dump(by_alias=True)['inputSchema']
+        for tool in result.tools
+    }
 
     for name in ('agy_worker','agy_continue'):
         schema=schemas[name]
