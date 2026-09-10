@@ -12,7 +12,7 @@ import tomlkit
 from .common import WorkerError, atomic_json, digest
 from .controller_client import ControllerClient
 from .controller_protocol import PROTOCOL_VERSION
-from .models import (McpWorkerRequest,McpContinueRequest,StatusRequest,CancelRequest,
+from .models import (McpWorkerRequest,McpContinueRequest,McpStatusRequest,CancelRequest,
                      ArtifactRequest,CapabilitiesRequest)
 from .security import inspect_data_dir_acl
 
@@ -63,7 +63,7 @@ def _install_codex_routing(current):
 
 
 def _remove_codex_routing(current):
-    """卸载时删除末尾 Worker managed block，并原样保留用户前置指令。"""
+    """卸载时删除末尾 managed block，并原样保留用户前置指令。"""
     if current is None:
         return None
     text=str(current)
@@ -135,7 +135,7 @@ def doctor():
 
 
 def schemas():
-    for name,model in [('agy_capabilities',CapabilitiesRequest),('agy_worker',McpWorkerRequest),('agy_continue',McpContinueRequest),('agy_status',StatusRequest),('agy_cancel',CancelRequest),('agy_artifact_read',ArtifactRequest)]:
+    for name,model in [('agy_capabilities',CapabilitiesRequest),('agy_worker',McpWorkerRequest),('agy_continue',McpContinueRequest),('agy_status',McpStatusRequest),('agy_cancel',CancelRequest),('agy_artifact_read',ArtifactRequest)]:
         atomic_json(ROOT/'schemas'/(name+'.json'),model.model_json_schema(by_alias=True))
 
 
