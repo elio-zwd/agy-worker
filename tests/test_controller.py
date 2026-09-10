@@ -434,33 +434,48 @@ def test_launch_retry_after_first_child_never_becomes_healthy(tmp_path, monkeypa
 
 @pytest.mark.skipif(sys.platform != "win32", reason="需要 Windows msvcrt 文件锁")
 def test_simultaneous_clients_do_not_duplicate_live_pending_launch(tmp_path, monkeypatch):
-    """首个 WMI 子进程仍存活且尚未发布 health 时，其他 client 不得重复 launch。"""
+    """第二个 client 确实观察到首个存活 pending PID 时，不得重复 launch。"""
     config = make_config(tmp_path)
-    ready_at = time.monotonic() + 0.8
     fake_state = {"pid": 41001, "instance_id": "a" * 32}
     launches = []
     launches_lock = threading.Lock()
+    launch_started = threading.Event()
+    second_saw_pending = threading.Event()
+    publish_ready = threading.Event()
+    launch_thread_id = [None]
 
     def fake_read_state(_self):
-        return fake_state if time.monotonic() >= ready_at else None
+        return fake_state if publish_ready.is_set() else None
 
     def fake_launch(_self):
         with launches_lock:
             pid = 41001 + len(launches)
             launches.append(pid)
+            launch_thread_id[0] = threading.get_ident()
+            launch_started.set()
             return pid
+
+    def fake_process_is_alive(_pid):
+        if launch_thread_id[0] is not None and threading.get_ident() != launch_thread_id[0]:
+            second_saw_pending.set()
+        return True
 
     monkeypatch.setattr(ControllerClient, "_read_state", fake_read_state)
     monkeypatch.setattr(ControllerClient, "_healthy", lambda _self, state: state is not None)
     monkeypatch.setattr(
         ControllerClient,
         "_process_is_alive",
-        staticmethod(lambda _pid: True),
+        staticmethod(fake_process_is_alive),
         raising=False,
     )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        clients = list(pool.map(lambda _: ControllerClient(config, startup_timeout=2), range(2)))
+        first = pool.submit(ControllerClient, config, startup_timeout=2)
+        assert launch_started.wait(1), "首个 client 未实际发起 launch"
+        second = pool.submit(ControllerClient, config, startup_timeout=2)
+        assert second_saw_pending.wait(1), "第二个 client 未观察到共享 pending PID"
+        publish_ready.set()
+        clients = [first.result(timeout=2), second.result(timeout=2)]
 
     assert len(clients) == 2
     assert launches == [41001]
