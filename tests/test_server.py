@@ -133,4 +133,4 @@ def test_server_uses_package_metadata_version(monkeypatch):
     server_module.build_server(object())
 
     assert captured['name'] == 'elio-agy-worker'
-    assert captured['version'] == implementation_version() == '0.3.1'
+    assert captured['version'] == implementation_version() == '0.3.2'
