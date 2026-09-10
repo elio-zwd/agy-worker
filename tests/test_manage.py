@@ -52,6 +52,7 @@ def test_register_adds_codex_routing_without_overwriting_existing_instructions(m
     assert "不可直接" in instructions or "不得直接" in instructions
     assert document["mcp_servers"]["other"]["command"] == "other.exe"
     assert document["mcp_servers"]["agy_worker"]["command"] == str(Path(manage.sys.executable))
+    assert document["mcp_servers"]["agy_worker"]["tool_timeout_sec"] > 600
 
     # 重复注册必须幂等，不能把同一 developer instruction 反复追加到上下文。
     manage.register()
