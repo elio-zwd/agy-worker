@@ -62,7 +62,7 @@ def test_status_uses_short_text_and_canonical_structured_content(monkeypatch):
     }
     callback=capture_call_tool(monkeypatch,FakeClient(result=compact_status))
 
-    result=call_tool(callback,'agy_status',{'task_id':'task-1','wait_ms':0})
+    result=call_tool(callback,'agy_status',{'task_id':'task-1'})
 
     assert result.structured_content==compact_status
     assert len(result.content)==1
@@ -113,7 +113,7 @@ def test_artifact_text_uses_single_text_payload(monkeypatch):
 def test_worker_error_keeps_structured_body_without_duplicate_json(monkeypatch):
     callback=capture_call_tool(monkeypatch,FakeClient(error=WorkerError('worker_busy','busy')))
 
-    result=call_tool(callback,'agy_status',{'task_id':'task-1','wait_ms':0})
+    result=call_tool(callback,'agy_status',{'task_id':'task-1'})
 
     assert result.is_error is True
     assert result.structured_content['error']=='worker_busy'
