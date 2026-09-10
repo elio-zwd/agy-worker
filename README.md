@@ -10,7 +10,7 @@ Codex/GPT 负责需求、总控、判断、源码分析和核心修改。AGY 负
 
 ### v0.3.1 Controller 加固状态
 
-`fix/controller-hardening-v031` 已实现协议 v2 与 Controller 身份冻结、stale 配置/实现检测、跨协议显式停止、custom config Controller 生命周期、启动锁接管重试、status 重连预算、最多 16 个 inflight 的背压、queued 立即取消，以及 data_dir ACL advisory。**这些新增行为在最终 Windows 本地验收完成前只视为“代码已实现、待验收”，不能据此宣称全部运行验证已通过。**
+`fix/controller-hardening-v031` 已实现协议 v2 与 Controller 身份冻结、stale 配置/实现检测、跨协议显式停止、custom config Controller 生命周期、启动锁接管重试、最多 16 个 inflight 的背压、queued 立即取消，以及 data_dir ACL advisory。**这些新增行为在最终 Windows 本地验收完成前只视为“代码已实现、待验收”，不能据此宣称全部运行验证已通过。**
 
 v0.3.1 不会自动停止或自动重启 stale Controller。新 Bridge 发现后台实例仍运行旧配置或旧实现时会 fail-closed，并要求维护者显式停止；未完成任务仍遵循“Controller 重启后标记 interrupted、不自动重做”的既有边界。
 
@@ -45,7 +45,7 @@ pwsh.exe -NoProfile -File scripts/check.ps1
 pwsh.exe -NoProfile -File scripts/register.ps1
 ```
 
-`register.ps1` 登记 AGY 私有 Broker及 Codex 的 `agy_worker`，保留其他 MCP。Codex 原配置备份在 `work/backups`，这些备份可能包含敏感配置，请勿提交。重新安装使用 `scripts/install.ps1 -Python <Python完整路径>`，依赖锁定在 `requirements.lock` 和 `vendor/browser/package-lock.json`。
+`register.ps1` 登记 AGY 私有 Broker 及 Codex 的 `agy_worker`，保留其他 MCP。Codex 原配置备份在 `work/backups`，这些备份可能包含敏感配置，请勿提交。重新安装使用 `scripts/install.ps1 -Python <Python完整路径>`，依赖锁定在 `requirements.lock` 和 `vendor/browser/package-lock.json`。
 
 同一数据目录仍只允许一个 Runtime，但可以同时存在多个 stdio Bridge。Controller 继续只有 1 个执行槽；v0.3.1 最多接受 16 个排队或运行中的 inflight 任务，第 17 个新的逻辑请求返回 `worker_busy`。同 `request_id`、同 fingerprint 的幂等重试在容量已满时仍返回原 task；queued Future 若尚未开始执行，`agy_cancel` 会直接进入 `cancelled`，无需等待前面的任务释放执行槽。
 
