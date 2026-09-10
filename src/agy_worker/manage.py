@@ -29,35 +29,48 @@ CODEX_ROUTING_BLOCK=(
 )
 
 
+def _split_codex_routing(text):
+    """拆出末尾 managed block；结构异常时拒绝猜测用户配置。"""
+    begin_count=text.count(CODEX_ROUTING_BEGIN)
+    end_count=text.count(CODEX_ROUTING_END)
+    if not begin_count and not end_count:
+        return text,None
+    if begin_count!=1 or end_count!=1:
+        raise ValueError("Codex developer_instructions 中存在冲突或损坏的 AGY Worker 路由指令标记，拒绝覆盖")
+    begin=text.index(CODEX_ROUTING_BEGIN)
+    end=text.index(CODEX_ROUTING_END,begin)+len(CODEX_ROUTING_END)
+    if end!=len(text):
+        raise ValueError("Codex developer_instructions 中存在冲突或损坏的 AGY Worker 路由指令标记，拒绝覆盖")
+    prefix=text[:begin]
+    if prefix:
+        if not prefix.endswith("\n\n"):
+            raise ValueError("Codex developer_instructions 中存在冲突或损坏的 AGY Worker 路由指令标记，拒绝覆盖")
+        prefix=prefix[:-2]
+    return prefix,text[begin:end]
+
+
 def _install_codex_routing(current):
-    """在既有 developer_instructions 末尾追加唯一的 Worker 路由块。"""
+    """追加或升级末尾 Worker managed block，并原样保留用户前置指令。"""
     if current is None:
         return CODEX_ROUTING_BLOCK
     text=str(current)
-    begin_count=text.count(CODEX_ROUTING_BEGIN)
-    end_count=text.count(CODEX_ROUTING_END)
-    if begin_count or end_count:
-        if begin_count==1 and end_count==1 and (
-            text==CODEX_ROUTING_BLOCK or text.endswith("\n\n"+CODEX_ROUTING_BLOCK)
-        ):
-            return text
-        raise ValueError("Codex developer_instructions 中存在冲突或损坏的 AGY Worker 路由指令标记，拒绝覆盖")
+    prefix,managed=_split_codex_routing(text)
+    if managed is not None:
+        return (prefix+"\n\n" if prefix else "")+CODEX_ROUTING_BLOCK
+    if not text:
+        return CODEX_ROUTING_BLOCK
     return text+"\n\n"+CODEX_ROUTING_BLOCK
 
 
 def _remove_codex_routing(current):
-    """卸载时只删除本安装追加在末尾的路由块，保留用户原有指令。"""
+    """卸载时删除末尾 Worker managed block，并原样保留用户前置指令。"""
     if current is None:
         return None
     text=str(current)
-    if text==CODEX_ROUTING_BLOCK:
-        return None
-    suffix="\n\n"+CODEX_ROUTING_BLOCK
-    if text.endswith(suffix):
-        return text[:-len(suffix)]
-    if CODEX_ROUTING_BEGIN in text or CODEX_ROUTING_END in text:
-        raise ValueError("Codex developer_instructions 中存在冲突或损坏的 AGY Worker 路由指令标记，拒绝覆盖")
-    return text
+    prefix,managed=_split_codex_routing(text)
+    if managed is None:
+        return text
+    return prefix or None
 
 
 def register(remove=False):
