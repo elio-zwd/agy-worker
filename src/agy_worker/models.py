@@ -96,7 +96,15 @@ class ContinueRequest(WorkerRequest):
     expected_turn: int = Field(ge=1)
 
 
+class McpStatusRequest(Strict):
+    """Codex 可选择的单次 MCP 总等待预算；省略时默认 50 秒。"""
+    task_id: str
+    after_revision: int | None = None
+    wait_ms: int = Field(50000, ge=50000, le=600000)
+
+
 class StatusRequest(Strict):
+    """Controller/Runtime 内部单段等待；MCP 会把较长总预算切成最多 25 秒的分片。"""
     task_id: str
     after_revision: int | None = None
     wait_ms: int = Field(0, ge=0, le=25000)
