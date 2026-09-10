@@ -158,16 +158,17 @@ class ControllerClient:
                     request_timeout=min(0.5, remaining),
                 )
             except WorkerError as error:
-                if error.code == "controller_unavailable":
-                    return {"ok": True, "status": "stopped"}
-                raise
+                if error.code != "controller_unavailable":
+                    raise
+                # listener 可以先于 ControllerService.close() 最后的 state unlink 消失。
+                # health 不可达只证明 HTTP 已停，不能据此宣告完整退出。
+                health = None
 
-            if health.get("status") != "ready":
-                return {"ok": True, "status": "stopped"}
-            if target_instance_id is not None and health.get("instance_id") not in (None, target_instance_id):
-                return {"ok": True, "status": "replaced"}
-            if target_instance_id is None and health.get("pid") not in (None, target_pid):
-                return {"ok": True, "status": "replaced"}
+            if isinstance(health, dict):
+                if target_instance_id is not None and health.get("instance_id") not in (None, target_instance_id):
+                    return {"ok": True, "status": "replaced"}
+                if target_instance_id is None and health.get("pid") not in (None, target_pid):
+                    return {"ok": True, "status": "replaced"}
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
         raise WorkerError("controller_stop_timeout", "Controller 未在超时内完全退出")
@@ -342,6 +343,75 @@ class ControllerClient:
             stdout.close()
             stderr.close()
 
+    @staticmethod
+    def _read_pending_launch_pid(lock_file, *, max_age=60):
+        """读取启动锁中的共享 pending PID；陈旧或损坏元数据按无 pending 处理。"""
+        try:
+            lock_file.seek(0)
+            raw = lock_file.read()
+            if not raw:
+                return None
+            value = json.loads(raw.decode("utf-8"))
+            if not isinstance(value, dict):
+                return None
+            pid = value.get("pid")
+            created_at = value.get("created_at")
+            if not isinstance(pid, int) or pid <= 0 or not isinstance(created_at, (int, float)):
+                return None
+            if time.time() - float(created_at) > max(1.0, float(max_age)):
+                return None
+            return pid
+        except (OSError, UnicodeDecodeError, ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _write_pending_launch_pid(lock_file, pid):
+        """在仍持 launch lock 时发布 PID，让其他 Bridge 知道已有子进程正在启动。"""
+        payload = json.dumps({"pid": pid, "created_at": time.time()}, separators=(",", ":")).encode("ascii")
+        lock_file.seek(0)
+        lock_file.truncate(0)
+        lock_file.write(payload)
+        lock_file.flush()
+
+    @staticmethod
+    def _process_is_alive(pid):
+        """检查 WMI 返回的 PID 是否仍存活；检查失败时保守地避免重复 launch。"""
+        if not isinstance(pid, int) or pid <= 0:
+            return False
+        if sys.platform != "win32":
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return False
+            return True
+
+        import ctypes
+        from ctypes import wintypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            error = ctypes.get_last_error()
+            # ERROR_INVALID_PARAMETER / ERROR_NOT_FOUND 表示 PID 不存在；其他失败（例如
+            # ACL 拒绝查询）按“可能仍活着”处理，避免未知状态触发进程风暴。
+            return error not in (87, 1168)
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+
     def _ensure(self, startup_timeout):
         """在同一 deadline 内反复观察 health、抢启动锁并按 cooldown 重试。"""
         import msvcrt
@@ -372,12 +442,15 @@ class ControllerClient:
                     if self._healthy(state):
                         return self._accept_healthy_state(state)
                     now_monotonic = time.monotonic()
-                    if now_monotonic >= next_launch_at:
+                    pending_pid = self._read_pending_launch_pid(lock_file)
+                    pending_alive = pending_pid is not None and self._process_is_alive(pending_pid)
+                    if not pending_alive and now_monotonic >= next_launch_at:
                         try:
                             pid = self._launch()
                             self.last_launch_pid = pid
                             if isinstance(pid, int) and pid > 0:
                                 self._launched_pids.add(pid)
+                                self._write_pending_launch_pid(lock_file, pid)
                             last_launch_error = None
                         except WorkerError as error:
                             if error.code == "dependency_missing":
