@@ -177,17 +177,40 @@ def test_stop_waits_for_state_disappearance_after_health_disconnect(tmp_path, mo
     assert not state_path.exists()
 
 
+def test_owned_launch_accepts_healthy_descendant_pid(monkeypatch):
+    """Windows venv launcher PID 与 Python 子进程 PID 不同时，仍需建立同一次 launch 的 ownership。"""
+    client = object.__new__(ControllerClient)
+    client.started_controller = False
+    client.started_instance_id = None
+    client.last_launch_pid = 41001
+    client._launched_pids = {41001}
+    state = {"pid": 42002, "instance_id": "a" * 32}
+
+    monkeypatch.setattr(
+        ControllerClient,
+        "_process_descends_from",
+        staticmethod(lambda pid, ancestor: (pid, ancestor) == (42002, 41001)),
+        raising=False,
+    )
+
+    client._accept_healthy_state(state)
+
+    assert client.started_controller is True
+    assert client.started_instance_id == state["instance_id"]
+
+
 @pytest.mark.skipif(
     controller_client_module.sys.platform != "win32",
     reason="需要真实 Windows WMI Controller 启动",
 )
 def test_real_wmi_launch_records_controller_ownership(tmp_path):
-    """真实 WMI 返回 PID 必须对应最终 healthy instance，才能安全建立 run-task ownership。"""
+    """真实 WMI venv launcher 必须能安全归属其最终 healthy Python 子进程。"""
     config, data_dir = make_config(tmp_path)
     client = None
     try:
         client = ControllerClient(config, startup_timeout=10)
-        assert client.last_launch_pid == client.state["pid"]
+        assert client.last_launch_pid is not None
+        assert client.state["pid"] > 0
         assert client.started_controller is True
         assert client.started_instance_id == client.state["instance_id"]
     finally:
