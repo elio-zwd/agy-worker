@@ -240,6 +240,34 @@ def test_terminal_public_result_is_compact_and_keeps_artifact_drill_down(runtime
     assert diagnostics['text']
 
 
+def test_source_changed_count_survives_record_preview_truncation(runtime):
+    state=runtime.submit(request(request_id='req-source-changed-count'))
+    context=runtime.active[state['task_id']]
+    preview=[f'src/File{index}.kt' for index in range(5)]
+    context['record'].update(
+        status='failed',
+        result={
+            'schema_version':1,
+            'status':'failed',
+            'summary':'源码发生变化。',
+            'source_changed':True,
+            'changed_files':preview,
+            'changed_files_count':12,
+            'termination_reason':'unexpected_source_change',
+            'artifacts':[],
+            'artifact_count':0,
+            'result_artifact_id':'result',
+            'truncated':True,
+        },
+    )
+    runtime._save(context['record'])
+
+    compact=runtime.status(state['task_id'],wait_ms=0)['result']
+
+    assert compact['changed_files_count']==12
+    assert compact['changed_files_preview']==preview
+
+
 def test_terminal_status_wins_over_same_after_revision(runtime):
     state=runtime.submit(request(request_id='req-terminal-same-rev'))
     context=runtime.active[state['task_id']]
