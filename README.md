@@ -14,6 +14,12 @@ Codex/GPT 负责需求、总控、判断、源码分析和核心修改。AGY 负
 
 v0.3.1 不会自动停止或自动重启 stale Controller。新 Bridge 发现后台实例仍运行旧配置或旧实现时会 fail-closed，并要求维护者显式停止；未完成任务仍遵循“Controller 重启后标记 interrupted、不自动重做”的既有边界。
 
+### v0.3.2 低上下文返回状态
+
+`perf/context-efficient-status-v032` 收缩 Codex 默认可见的状态/结果热路径：任务仍完整执行并保存证据，但普通 status 不再重复展开 warning/error 正文和 artifact manifest。当前分支的生产实现已写入，仍需最终 Windows + 真实 AGY 验收；在验收完成前不能把本节描述为正式已验证能力。
+
+v0.3.2 不改变 Controller protocol v2、六个 MCP 工具、单 Runtime、单执行槽、16 inflight、权限或 request_id 语义。它只改变公开结果视图和 MCP 表示方式，目的是让 AGY 继续承担高噪声工作，而 Codex 默认只接收下一步判断所需信息。
+
 ## 当前可用范围
 
 | 能力 | 本次状态 |
@@ -79,6 +85,31 @@ Controller token 的保密性仍依赖本机用户和目录 ACL。`doctor` 在 v
 | `agy_artifact_read` | 按证据 ID 读取元数据、最多 200 行文本或图片 |
 
 精确字段以 `schemas/*.json` 为准。MCP Resources 同时提供只读的 `agy://capabilities` 和 `agy://workspaces`；资源模板查询返回空列表，不再产生 Method not found。每轮重新授权，续会话不代表继承额外权限。
+
+### v0.3.2 紧凑 status / result 合同
+
+调用 `agy_status` 时，推荐把上一次看到的 `revision` 作为 `after_revision`。如果最多等待 25 秒后仍没有更高 revision，且任务尚未进入终态，只返回最小无变化 envelope：
+
+```json
+{
+  "task_id": "task-...",
+  "status": "running",
+  "revision": 5,
+  "unchanged": true
+}
+```
+
+`unchanged=true` 只表示这个观察窗口里没有新的状态 revision。**它不表示 AGY、Gradle 或其他操作卡死，也不会触发自动取消。** 即使连续多次 unchanged，也应继续等待实际进程终态，除非用户明确取消或既有总超时到达。
+
+终态 status 默认只返回决策摘要，包括 `summary`、真实 operation 退出码、错误/警告计数、termination reason、源码是否变化以及可追溯的 evidence/result artifact ID；不再默认展开 `errors[]`、`warnings[]` 和整份 `artifacts[]` metadata。需要细节时按需读取：
+
+- `diagnostics_artifact_id`（通常为 `errors`）：结构化错误/警告正文；
+- `operation.evidence.artifact_id`（通常为 `operation-log`）：带上下文的脱敏操作日志；
+- `result_artifact_id`（通常为 `result`）：完整任务 result 证据。
+
+普通 JSON MCP 工具以 `structuredContent` 为 canonical machine result；`TextContent` 只提供不超过 256 UTF-8 bytes 的人类短摘要，不再把同一完整 JSON 复制第二遍。`agy_artifact_read` 是显式高信息量冷路径：文本/metadata 只发送一份实际 payload，图片仍走 ImageContent。为降低上下文消耗，读取日志时优先指定必要的 `start_line` / `line_count`，不要无条件拉取整份证据。
+
+v0.3.2 的公开字节门槛是：unchanged status ≤256B、changed nonterminal ≤512B、build/test terminal ≤1536B、其他 terminal ≤2048B、热路径 TextContent ≤256B。完整本地 evidence 不受这些热路径上限删除，仍由 artifact 机制保留。
 
 ### request_id 合同
 
@@ -156,7 +187,7 @@ Runtime 复制 Git 跟踪文件、未忽略的未跟踪文件，以及已初始�
 
 ## 结果和证据
 
-任务目录 `data/tasks/<task_id>` 保存 request.json、permissions.json、audit.ndjson、result.json、manifest.json、raw 日志、脱敏日志与截图。manifest 带 SHA-256、大小、类型和敏感标记。状态摘要限制最多 16 KiB；更多证据按 ID 读取。原始敏感日志只能本机查看，不通过普通 artifact 文本读取接口返回。
+任务目录 `data/tasks/<task_id>` 保存 request.json、permissions.json、audit.ndjson、result.json、manifest.json、raw 日志、脱敏日志与截图。manifest 带 SHA-256、大小、类型和敏感标记。v0.3.2 的普通公开 status 使用独立紧凑预算，完整 result 和更多证据按 ID 读取；原始敏感日志只能本机查看，不通过普通 artifact 文本读取接口返回。
 
 编译摘要区分 AGY 执行状态与实际命令退出码。错误列表保留原文、可提取的文件/行列、Gradle task（如存在）及日志行引用；编译器未提供行列时返回 null，不编造。stdout 和 stderr 原始文件分开保存，合并日志是 stdout 后接 stderr，不能据此推断跨流时间顺序。
 
