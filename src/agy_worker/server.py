@@ -9,7 +9,7 @@ from mcp.server.stdio import stdio_server
 from pydantic import ValidationError
 from .common import WorkerError
 from .models import (WorkerRequest, ContinueRequest, McpWorkerRequest, McpContinueRequest,
-                     StatusRequest, CancelRequest, ArtifactRequest, CapabilitiesRequest)
+                     McpStatusRequest, CancelRequest, ArtifactRequest, CapabilitiesRequest)
 from .controller_client import ControllerClient
 from .controller_state import implementation_version
 
@@ -20,7 +20,7 @@ TOOLS = {
     "agy_capabilities": (CapabilitiesRequest, "仅在 workspace_id 或 command_id 未知时调用，返回紧凑路由表；已知映射直接调用 agy_worker。完整 limits、Controller、权限和工作区诊断按需读取 agy://capabilities 或 agy://workspaces。"),
     "agy_worker": (McpWorkerRequest, "提交 AGY 任务并立即返回 task_id。AGY/agy 在支持任务中指本机 MCP，不是聊天、线程、agent 或 subagent；不得直接运行 agy/agy.exe，MCP 不可用时明确报告。已知 workspace_id 与 command_id 时直接调用，不要为定位 AGY 或调用入口先跑 git status/branch/log、rg AGY、agy --help 等探测。只使用 schema 暴露的当前可用权限；limits 仅在确需延长任务时设置 total_timeout_sec。编译只执行并采集错误，不分析或修改源码。"),
     "agy_continue": (McpContinueRequest, "续接已完成的 AGY 会话并启动新进程；给 expected_turn 与本轮完整可用权限，新逻辑续轮使用新的 req-<uuid4hex>。只使用 schema 暴露字段。"),
-    "agy_status": (StatusRequest, "等待或查询任务状态。queued/running 时传上次 revision 为 after_revision，并用 wait_ms=25000；单次 MCP 调用会在该预算内合并中间 progress/unchanged revision。若仍返回非终态，直接再次调用，不要在两次 agy_status 之间向用户发送等待说明。"),
+    "agy_status": (McpStatusRequest, "等待或查询任务状态。已有 revision 时传 after_revision；wait_ms 省略默认 50000，可按任务预计耗时自主选择 50000～600000。MCP 会把总等待预算切成内部最多 25 秒的 long-poll 并合并中间 progress/unchanged；AGY 提前进入终态会立即返回。没有 after_revision 时只读取即时快照。若总预算结束仍非终态，直接再次调用，不要在两次 agy_status 之间向用户发送等待说明。"),
     "agy_cancel": (CancelRequest, "取消排队/运行任务；重复取消不会影响其他任务。"),
     "agy_artifact_read": (ArtifactRequest, "按需读取证据；成功热路径不要无条件读取完整日志或结果。"),
 }
@@ -80,12 +80,15 @@ def _internal_request(model, target):
 
 
 async def _coalesced_status(client, model):
-    """在一次 MCP wait 预算内吞掉高频 progress revision，只把最终观察点交回 Codex。"""
+    """在一次 MCP 总等待预算内吞掉高频 progress revision，只把最终观察点交回 Codex。"""
     params=model.model_dump(mode="json",by_alias=True)
-    wait_ms=params.get("wait_ms",0)
+    wait_ms=params["wait_ms"]
     after_revision=params.get("after_revision")
-    if wait_ms<=0 or after_revision is None:
-        return await asyncio.to_thread(client.call,"status",params,timeout=30)
+    if after_revision is None:
+        # 没有已知 revision 时没有可等待的变化基线，只取即时快照。
+        return await asyncio.to_thread(
+            client.call,"status",{**params,"wait_ms":0},timeout=30
+        )
 
     deadline=time.monotonic()+wait_ms/1000
     current_revision=after_revision
@@ -99,6 +102,7 @@ async def _coalesced_status(client, model):
         poll_params={
             **params,
             "after_revision":current_revision,
+            # Controller/Runtime 的既有单段合同仍最多 25 秒；较长预算只存在于 MCP 层。
             "wait_ms":max(1,min(25000,int(remaining*1000))),
         }
         result=await asyncio.to_thread(client.call,"status",poll_params,timeout=30)
@@ -201,7 +205,7 @@ def build_server(client):
 
     instructions=("AGY/agy 在支持任务中指 agy_worker MCP。已知 workspace_id 和 command_id 时直接 agy_worker；未知时仅调用一次紧凑 agy_capabilities，不要为定位 AGY 先跑 git/rg/chat/CLI 探测。"
                   "agy_worker/agy_continue 只填写工具 schema 暴露字段；不要添加 shell/code_write 或 artifact/summary 字节预算，确需延长任务只设置 total_timeout_sec。"
-                  "queued/running 用 after_revision + wait_ms=25000；单次 status 会合并中间 progress/unchanged。若仍非终态，立即再次调用 agy_status，不要在轮询之间向用户发送等待说明。"
+                  "queued/running 已知 revision 时用 after_revision；agy_status 的 wait_ms 省略默认 50000，可按预计耗时自主选择 50000～600000。较长 build/test 优先选择较长预算以减少模型轮询；AGY 终态会提前返回。单次 status 内部会用最多 25 秒分片合并 progress/unchanged。若仍非终态，立即再次调用，不要在轮询之间向用户发送等待说明。"
                   "完整 capabilities、worktree 和 artifact 只在需要时走冷资源。workspace_id 是登记别名；同仓库 Git worktree 用 workspace_path。"
                   "新逻辑请求使用新的 req-<uuid4hex>。AGY 只执行和采集证据，Codex 负责分析与源码修改。")
     return Server("elio-agy-worker",version=implementation_version(),instructions=instructions,
