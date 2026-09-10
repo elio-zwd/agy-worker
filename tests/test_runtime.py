@@ -212,13 +212,18 @@ def test_terminal_public_result_is_compact_and_keeps_artifact_drill_down(runtime
     result_path=context['directory']/'result.json'
     result_path.write_text(json.dumps(full_result,ensure_ascii=False),encoding='utf-8')
     context['artifacts'].add('result',result_path)
-    context['record'].update(status='failed',result=full_result)
+    context['record'].update(
+        status='failed',
+        progress={'agy_pid':9999,'captured_bytes':987654},
+        result=full_result,
+    )
     runtime._save(context['record'])
 
     public=runtime.status(state['task_id'],wait_ms=0)
     compact=public['result']
 
     assert public['status']=='failed'
+    assert 'progress' not in public
     assert compact['schema_version']==2
     assert compact['operation']['exit_code']==1
     assert compact['operation']['total_errors']==20
@@ -266,6 +271,39 @@ def test_source_changed_count_survives_record_preview_truncation(runtime):
 
     assert compact['changed_files_count']==12
     assert compact['changed_files_preview']==preview
+
+
+def test_source_changed_preview_is_utf8_bounded(runtime):
+    state=runtime.submit(request(request_id='req-source-changed-preview-budget'))
+    context=runtime.active[state['task_id']]
+    original=['路径/'+('很长的文件名'*120)+f'/{index}.kt' for index in range(5)]
+    context['record'].update(
+        status='failed',
+        result={
+            'schema_version':1,
+            'status':'failed',
+            'summary':'错'*500,
+            'source_changed':True,
+            'changed_files':original,
+            'changed_files_count':5,
+            'termination_reason':'unexpected_source_change',
+            'artifacts':[],
+            'artifact_count':0,
+            'result_artifact_id':'result',
+            'truncated':True,
+        },
+    )
+    runtime._save(context['record'])
+
+    public=runtime.status(state['task_id'],wait_ms=0)
+    compact=public['result']
+    encoded=json.dumps(public,ensure_ascii=False,separators=(',',':')).encode('utf-8')
+
+    assert compact['changed_files_count']==5
+    assert len(compact['changed_files_preview'])==5
+    assert all(len(path.encode('utf-8'))<=128 for path in compact['changed_files_preview'])
+    assert compact['changed_files_preview']!=original
+    assert len(encoded)<=2048
 
 
 def test_public_runtime_error_is_utf8_bounded(runtime):
