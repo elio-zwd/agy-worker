@@ -433,52 +433,64 @@ def test_launch_retry_after_first_child_never_becomes_healthy(tmp_path, monkeypa
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="需要 Windows msvcrt 文件锁")
-def test_simultaneous_clients_do_not_duplicate_live_pending_launch(tmp_path, monkeypatch):
-    """第二个 client 确实观察到首个存活 pending PID 时，不得重复 launch。"""
+def test_launch_writes_shared_pending_pid(tmp_path, monkeypatch):
+    """成功发起 launch 后，必须把 PID 发布到共享启动锁元数据。"""
     config = make_config(tmp_path)
+    launched = []
     fake_state = {"pid": 41001, "instance_id": "a" * 32}
-    launches = []
-    launches_lock = threading.Lock()
-    launch_started = threading.Event()
-    second_saw_pending = threading.Event()
-    publish_ready = threading.Event()
-    launch_thread_id = [None]
 
     def fake_read_state(_self):
-        return fake_state if publish_ready.is_set() else None
+        return fake_state if launched else None
 
     def fake_launch(_self):
-        with launches_lock:
-            pid = 41001 + len(launches)
-            launches.append(pid)
-            launch_thread_id[0] = threading.get_ident()
-            launch_started.set()
-            return pid
-
-    def fake_process_is_alive(_pid):
-        if launch_thread_id[0] is not None and threading.get_ident() != launch_thread_id[0]:
-            second_saw_pending.set()
-        return True
+        launched.append(41001)
+        return 41001
 
     monkeypatch.setattr(ControllerClient, "_read_state", fake_read_state)
     monkeypatch.setattr(ControllerClient, "_healthy", lambda _self, state: state is not None)
+    monkeypatch.setattr(ControllerClient, "_launch", fake_launch)
+
+    client = ControllerClient(config, startup_timeout=2)
+
+    assert client.state == fake_state
+    assert launched == [41001]
+    with (tmp_path / "data" / "controller-launch.lock").open("rb") as lock_file:
+        assert ControllerClient._read_pending_launch_pid(lock_file) == 41001
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="需要 Windows msvcrt 文件锁")
+def test_live_shared_pending_pid_blocks_duplicate_launch(tmp_path, monkeypatch):
+    """另一个 Bridge 已发布仍存活的 pending PID 时，本 client 只能等待而不能重复 launch。"""
+    config = make_config(tmp_path)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    lock_path = data_dir / "controller-launch.lock"
+    with lock_path.open("w+b") as lock_file:
+        ControllerClient._write_pending_launch_pid(lock_file, 41001)
+
+    reads = [0]
+    fake_state = {"pid": 42002, "instance_id": "b" * 32}
+
+    def fake_read_state(_self):
+        reads[0] += 1
+        return fake_state if reads[0] >= 3 else None
+
+    def forbidden_launch(_self):
+        raise AssertionError("live shared pending PID 存在时不得重复 launch")
+
+    monkeypatch.setattr(ControllerClient, "_read_state", fake_read_state)
+    monkeypatch.setattr(ControllerClient, "_healthy", lambda _self, state: state is not None)
+    monkeypatch.setattr(ControllerClient, "_launch", forbidden_launch)
     monkeypatch.setattr(
         ControllerClient,
         "_process_is_alive",
-        staticmethod(fake_process_is_alive),
-        raising=False,
+        staticmethod(lambda pid: pid == 41001),
     )
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(ControllerClient, config, startup_timeout=2)
-        assert launch_started.wait(1), "首个 client 未实际发起 launch"
-        second = pool.submit(ControllerClient, config, startup_timeout=2)
-        assert second_saw_pending.wait(1), "第二个 client 未观察到共享 pending PID"
-        publish_ready.set()
-        clients = [first.result(timeout=2), second.result(timeout=2)]
+    client = ControllerClient(config, startup_timeout=2)
 
-    assert len(clients) == 2
-    assert launches == [41001]
+    assert client.state == fake_state
+    assert client.started_controller is False
 
 
 def test_windows_wmi_launch_returns_created_pid(tmp_path, monkeypatch):
