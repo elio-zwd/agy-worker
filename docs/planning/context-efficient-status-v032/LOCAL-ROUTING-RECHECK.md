@@ -9,13 +9,27 @@ repository: elio-zwd/agy-worker
 branch: perf/context-efficient-status-v032
 base: b51d81701f3cfe3859c485f87e42a03b22b4e3d7
 ROUTING_TEST_HEAD: b0c9726830db88500823820994aba0ab0efa5526
-ROUTING_CODE_HEAD: 13293e9fb2bbd309e0e9ee96929699514f5bdcf9
+ROUTING_INITIAL_CODE_HEAD: 13293e9fb2bbd309e0e9ee96929699514f5bdcf9
+ROUTING_FIX_HEAD: be29e8c78836deed4ccf88864cace5e1fc5dc7c2
 package: 0.3.2
 controller protocol: 2
 MCP tools: 6
 ```
 
-`ROUTING_CODE_HEAD` 之后只允许 `AGENTS.md` 和 `docs/planning/context-efficient-status-v032/**` 的说明/验收文件变化。如果出现其他源码、测试、脚本、配置或依赖变化，停止并报告。
+`ROUTING_FIX_HEAD` 是当前待验收生产代码。它之后只允许 `AGENTS.md` 和 `docs/planning/context-efficient-status-v032/**` 的说明/验收文件变化。如果出现其他源码、测试、脚本、配置或依赖变化，停止并报告。
+
+### 已知前一轮失败（不要重复当作当前结果）
+
+在旧 HEAD `c28713f09856331339968a7b5c4856b3e2b9ca6c` 上，本地权威检查真实得到：
+
+```text
+scripts/check.ps1 exit: 1
+pytest: 95 passed / 1 failed / 0 skipped / 0 warnings
+failed: tests/test_manage.py::test_register_adds_codex_routing_without_overwriting_existing_instructions
+reason: 生产文案为“不得用 shell/terminal 直接调用”，测试要求连续子串“不可直接”或“不得直接”
+```
+
+ChatGPT 技术复核后确认路由语义本身已禁止 direct CLI，但测试合同要求更明确连续措辞。`ROUTING_FIX_HEAD` 只把生产指令改为“不得直接用 shell/terminal 调用”，相对旧 HEAD 仅 `src/agy_worker/manage.py` 一行替换。当前 HEAD 必须重新执行完整检查，不能沿用旧结果。
 
 ## 1. 安全前置
 
@@ -35,10 +49,10 @@ git fetch origin
 git switch perf/context-efficient-status-v032
 git pull --ff-only origin perf/context-efficient-status-v032
 $Head = (git rev-parse HEAD).Trim()
-$RoutingCode = '13293e9fb2bbd309e0e9ee96929699514f5bdcf9'
-git merge-base --is-ancestor $RoutingCode HEAD
-Write-Host "routing_code_is_ancestor exit=$LASTEXITCODE"
-git diff --name-only "$RoutingCode..HEAD"
+$RoutingFix = 'be29e8c78836deed4ccf88864cace5e1fc5dc7c2'
+git merge-base --is-ancestor $RoutingFix HEAD
+Write-Host "routing_fix_is_ancestor exit=$LASTEXITCODE"
+git diff --name-only "$RoutingFix..HEAD"
 git status --short
 ```
 
@@ -56,7 +70,7 @@ $DiffExit = $LASTEXITCODE
 Write-Host "git diff --check exit=$DiffExit"
 ```
 
-原样记录：exit code、pytest passed/failed/skipped/warnings、compileall 结果和全部失败。旧 head 曾是 91 passed；本次新增 5 个路由测试，数量预计会增加，但**验收以实际输出和 0 failures 为准，不以预计数量代替证据**。
+原样记录：exit code、pytest passed/failed/skipped/warnings、compileall 结果和全部失败。前一轮旧 HEAD 是 `95 passed / 1 failed`；当前验收必须实际得到 exit `0` 和 `0 failed` 才能进入后续真实 Codex 路由验证。
 
 ## 3. 注册当前路由规则
 
@@ -80,11 +94,12 @@ s = d.get('developer_instructions','')
 print('routing_begin_count=', s.count('<AGY_WORKER_ROUTING>'))
 print('routing_end_count=', s.count('</AGY_WORKER_ROUTING>'))
 print('worker_rule_present=', 'agy_worker' in s and 'agy.exe' in s)
+print('direct_cli_prohibition_present=', '不得直接' in s or '不可直接' in s)
 print('mcp_registered=', 'agy_worker' in d.get('mcp_servers',{}))
 '@ | .venv\Scripts\python.exe -
 ```
 
-要求 begin/end 均为 `1`，`worker_rule_present=True`，`mcp_registered=True`。再次执行 `scripts/register.ps1` 后重复检查，计数仍必须为 `1`，证明真实配置幂等。
+要求 begin/end 均为 `1`，`worker_rule_present=True`，`direct_cli_prohibition_present=True`，`mcp_registered=True`。再次执行 `scripts/register.ps1` 后重复检查，计数仍必须为 `1`，证明真实配置幂等。
 
 ## 4. 真实 Codex 行为复验
 
@@ -94,7 +109,7 @@ print('mcp_registered=', 'agy_worker' in d.get('mcp_servers',{}))
 你让agy跑一下编译
 ```
 
-保存 Codex 可见 transcript。不要指导 Codex “一定要用 MCP”；这一步要验证自然语言路由本身。
+保存 Codex 可见 transcript。不要指导 Codex“一定要用 MCP”；这一步要验证自然语言路由本身。
 
 ### PASS 条件
 
@@ -112,8 +127,8 @@ print('mcp_registered=', 'agy_worker' in d.get('mcp_servers',{}))
 
 ```text
 branch_head:
-routing_code_is_ancestor:
-post_routing_code_changed_files:
+routing_fix_is_ancestor:
+post_routing_fix_changed_files:
 working_tree_before:
 
 scripts_check_exit:
@@ -130,6 +145,7 @@ routing_end_count_first:
 routing_begin_count_second:
 routing_end_count_second:
 worker_rule_present:
+direct_cli_prohibition_present:
 mcp_registered:
 
 new_codex_session: yes/no
