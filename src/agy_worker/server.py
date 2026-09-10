@@ -88,7 +88,7 @@ def validation_body(error):
         messages.append(message)
         details.append({"field":field,"rule":issue["type"],**context})
     return {"error":"invalid_request","message":"；".join(messages),"details":details,
-            "hint":"先调用 agy_capabilities 获取当前限制和可用工作区。"}
+            "hint":"优先省略 limits 使用服务端默认值；需要完整限制时读取 agy://capabilities。"}
 
 
 def build_server(client):
