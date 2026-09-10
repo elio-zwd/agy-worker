@@ -22,7 +22,7 @@ CODEX_ROUTING_END="</AGY_WORKER_ROUTING>"
 CODEX_ROUTING_BLOCK=(
     f"{CODEX_ROUTING_BEGIN}\n"
     "当用户要求‘让 AGY/agy’执行已支持的编译、测试、日志、浏览器、图片或 Android UI 任务时，必须走 `agy_worker` MCP；"
-    "不得用 shell/terminal 直接调用 `agy`、`agy.exe`、`agy -p`，正常任务也不要先跑 `agy --help` 探测。"
+    "不得直接用 shell/terminal 调用 `agy`、`agy.exe`、`agy -p`，正常任务也不要先跑 `agy --help` 探测。"
     "MCP 不可用时明确报告，不得静默回退。仅安装、更新、诊断 AGY CLI 本身或 agy-worker 维护脚本明确需要时，才可直接调用 CLI。\n"
     f"{CODEX_ROUTING_END}"
 )
