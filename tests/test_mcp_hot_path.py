@@ -257,3 +257,26 @@ def test_status_coalesces_progress_and_unchanged_until_terminal(monkeypatch):
     assert result.structured_content['revision']==3
     assert [call[1]['after_revision'] for call in client.calls]==[1,2,2]
     assert all(call[1]['wait_ms']>0 for call in client.calls)
+
+
+def test_status_coalescing_uses_one_total_wait_budget(monkeypatch):
+    """中间 revision 不能把 25 秒预算重置成每轮新的 25 秒。"""
+    client=StatusSequenceClient([
+        {'task_id':'task-1','status':'running','revision':2,'progress':{'captured_bytes':100}},
+        {'task_id':'task-1','status':'running','revision':3,'progress':{'captured_bytes':200}},
+        {
+            'task_id':'task-1','session_id':'session-1','turn':1,'status':'succeeded','revision':4,
+            'result':{'summary':'操作成功。','operation':{'exit_code':0}},
+        },
+    ])
+    ticks=iter([100.0,100.0,110.0,120.0])
+    monkeypatch.setattr(server_module.time,'monotonic',lambda:next(ticks))
+    handlers=capture_server(monkeypatch,client)
+
+    result=call_tool(handlers,'agy_status',{
+        'task_id':'task-1','after_revision':1,'wait_ms':25000,
+    })
+
+    assert result.structured_content['status']=='succeeded'
+    waits=[call[1]['wait_ms'] for call in client.calls]
+    assert waits==[25000,15000,5000]
