@@ -32,6 +32,7 @@ MAX_INFLIGHT_TASKS = 16
 PUBLIC_SUMMARY_MAX_BYTES = 768
 PUBLIC_ERROR_MESSAGE_MAX_BYTES = 1024
 PUBLIC_CHANGED_FILES_PREVIEW = 5
+PUBLIC_CHANGED_FILE_MAX_BYTES = 128
 READ_BROWSER = {"list_pages", "new_page", "navigate_page", "take_snapshot", "take_screenshot",
                 "list_console_messages", "get_console_message", "list_network_requests", "get_network_request", "wait_for"}
 WRITE_BROWSER = {"click", "fill", "fill_form", "press_key", "hover", "type_text"}
@@ -379,7 +380,10 @@ class Runtime:
         if compact["source_changed"]:
             changed=list(result.get("changed_files",[]))
             compact["changed_files_count"]=int(result.get("changed_files_count",len(changed)))
-            compact["changed_files_preview"]=changed[:PUBLIC_CHANGED_FILES_PREVIEW]
+            compact["changed_files_preview"]=[
+                _truncate_utf8(str(path),PUBLIC_CHANGED_FILE_MAX_BYTES)
+                for path in changed[:PUBLIC_CHANGED_FILES_PREVIEW]
+            ]
         return compact
 
     def _public_task(self, record, *, unchanged=False):
@@ -387,8 +391,10 @@ class Runtime:
         if unchanged:
             return {"task_id":record["task_id"],"status":record["status"],
                     "revision":record["revision"],"unchanged":True}
-        keys=("task_id","session_id","turn","status","revision","progress")
+        keys=("task_id","session_id","turn","status","revision")
         result={key:record[key] for key in keys if key in record}
+        if record.get("status") not in TERMINAL and "progress" in record:
+            result["progress"]=record["progress"]
         if "error" in record:
             error=record["error"]
             result["error"]={
@@ -617,7 +623,7 @@ class Runtime:
         if name in ("new_page","navigate_page"):
             if name=="navigate_page" and toolargs.get("type","url")!="url":
                 raise WorkerError("permission_denied","导航必须显式指定 URL")
-            if origin(toolargs.get("url","")) not in {origin(x) for x in permission.origins}:
+            if origin(toolargs.get("url","") ) not in {origin(x) for x in permission.origins}:
                 raise WorkerError("permission_denied","目标 origin 未授权")
         if c["browser"] is None:
             c["browser"]=Browser(self.config["browser"],c["directory"]/"browser.stderr.log")
