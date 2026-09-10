@@ -29,11 +29,21 @@ from .processes import run_process
 TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "interrupted"}
 MAX_CONCURRENT_TASKS = 1
 MAX_INFLIGHT_TASKS = 16
+PUBLIC_SUMMARY_MAX_BYTES = 768
+PUBLIC_CHANGED_FILES_PREVIEW = 5
 READ_BROWSER = {"list_pages", "new_page", "navigate_page", "take_snapshot", "take_screenshot",
                 "list_console_messages", "get_console_message", "list_network_requests", "get_network_request", "wait_for"}
 WRITE_BROWSER = {"click", "fill", "fill_form", "press_key", "hover", "type_text"}
 EXCLUDED = {".git", ".venv", "node_modules", "__pycache__", ".agents", ".codex", ".idea", ".gradle", "build"}
 EXCLUDED.update({".worktrees",".superpowers",".visual-audit",".markdown-cache","unpackage"})
+
+
+def _truncate_utf8(value, max_bytes):
+    """按 UTF-8 字节上限截断公开摘要，避免切出非法字符。"""
+    raw = (value or "").encode("utf-8")
+    if len(raw) <= max_bytes:
+        return value or ""
+    return raw[:max_bytes].decode("utf-8", errors="ignore")
 
 
 def origin(url):
@@ -339,8 +349,51 @@ class Runtime:
             context["future"]=self.pool.submit(self._run,context)
             return self.public(record)
 
+    def _public_result(self, result):
+        """从完整本地 result 生成 Codex 默认可见的紧凑决策视图。"""
+        compact={
+            "schema_version":2,
+            "summary":_truncate_utf8(result.get("summary",""),PUBLIC_SUMMARY_MAX_BYTES),
+            "source_changed":bool(result.get("source_changed",False)),
+            "termination_reason":result.get("termination_reason"),
+            "result_artifact_id":result.get("result_artifact_id","result"),
+            "artifact_count":int(result.get("artifact_count",len(result.get("artifacts",[])))),
+            "truncated":bool(result.get("truncated",False)),
+        }
+        operation=result.get("operation")
+        if operation:
+            compact["operation"]={
+                key:operation.get(key)
+                for key in ("command_id","exit_code","duration_ms","termination_reason",
+                            "total_errors","total_warnings","evidence")
+                if key in operation
+            }
+        else:
+            for key in ("total_errors","total_warnings"):
+                if key in result:
+                    compact[key]=result[key]
+        # build/test 的 execute 会创建 errors artifact；log 有诊断正文时同样创建。
+        if operation is not None or result.get("errors") or result.get("warnings"):
+            compact["diagnostics_artifact_id"]="errors"
+        if compact["source_changed"]:
+            changed=list(result.get("changed_files",[]))
+            compact["changed_files_count"]=len(changed)
+            compact["changed_files_preview"]=changed[:PUBLIC_CHANGED_FILES_PREVIEW]
+        return compact
+
+    def _public_task(self, record, *, unchanged=False):
+        """公开任务状态只保留下一步判断需要的字段，不修改持久 record。"""
+        if unchanged:
+            return {"task_id":record["task_id"],"status":record["status"],
+                    "revision":record["revision"],"unchanged":True}
+        keys=("task_id","session_id","turn","status","revision","progress","error")
+        result={key:record[key] for key in keys if key in record}
+        if "result" in record:
+            result["result"]=self._public_result(record["result"])
+        return result
+
     def public(self, record):
-        return {key:record[key] for key in ("task_id","session_id","turn","status","revision","created_at","updated_at","progress","result","error") if key in record}
+        return self._public_task(record)
 
     def status(self, task_id, after_revision=None, wait_ms=0):
         deadline=time.monotonic()+wait_ms/1000
@@ -350,8 +403,10 @@ class Runtime:
             if not row:
                 raise WorkerError("invalid_request","任务不存在")
             record=json.loads(row[0])
-            if after_revision is None or record["revision"]>after_revision or record["status"] in TERMINAL or time.monotonic()>=deadline:
-                return self.public(record)
+            if after_revision is None or record["revision"]>after_revision or record["status"] in TERMINAL:
+                return self._public_task(record)
+            if time.monotonic()>=deadline:
+                return self._public_task(record,unchanged=True)
             time.sleep(.1)
 
     def cancel(self, task_id, reason):
