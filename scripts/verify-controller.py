@@ -14,7 +14,7 @@ from agy_worker.common import WorkerError
 from agy_worker.controller_client import ControllerClient
 from agy_worker.controller_state import implementation_version
 
-EXPECTED_VERSION = "0.3.1"
+EXPECTED_VERSION = "0.3.2"
 EXPECTED_PROTOCOL = 2
 EXPECTED_TOOL_COUNT = 6
 EXPECTED_MAX_CONCURRENT = 1
@@ -88,7 +88,7 @@ def evaluate(result, *, fresh_status=None, stop_after_requested=False):
     """把验收合同转成显式 checks；任何缺口都让脚本非零退出。"""
     expected_version = implementation_version()
     checks = {
-        "package_version_is_0_3_1": expected_version == EXPECTED_VERSION,
+        "package_version_is_0_3_2": expected_version == EXPECTED_VERSION,
         "first_server_version_matches_package": result.get("first_server_version") == expected_version,
         "second_server_version_matches_package": result.get("second_server_version") == expected_version,
         "first_bridge_has_six_tools": result.get("tool_count") == EXPECTED_TOOL_COUNT,
