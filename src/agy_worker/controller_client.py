@@ -53,8 +53,20 @@ class ControllerClient:
         return WorkerError("controller_state_invalid", message)
 
     def _accept_healthy_state(self, state):
-        """只有 healthy state 的 PID 对应本 client 真正 launch 的子进程时才宣告 ownership。"""
-        if state and state.get("pid") in self._launched_pids and state.get("instance_id"):
+        """只有 healthy state 能归因到本 client 的 launch 时才宣告 ownership。"""
+        if not state or not state.get("instance_id"):
+            return state
+        state_pid = state.get("pid")
+        owned = state_pid in self._launched_pids
+        if not owned and sys.platform == "win32" and isinstance(state_pid, int) and state_pid > 0:
+            # Windows venv 的 pythonw.exe 是 redirector launcher；WMI 返回 launcher PID，
+            # 真正运行 Controller 的 Python 子进程拥有不同 PID。launcher 会等待子进程
+            # 退出，因此要求 ancestor 仍存活并验证后代关系，避免把并发外部实例误认成自己的。
+            for launch_pid in self._launched_pids:
+                if self._process_is_alive(launch_pid) and self._process_descends_from(state_pid, launch_pid):
+                    owned = True
+                    break
+        if owned:
             self.started_controller = True
             self.started_instance_id = state["instance_id"]
         return state
@@ -413,6 +425,49 @@ class ControllerClient:
             return exit_code.value == still_active
         finally:
             kernel32.CloseHandle(handle)
+
+    @staticmethod
+    def _process_descends_from(pid, ancestor_pid, *, max_depth=8):
+        """用 Win32_Process 父链验证 Controller PID 是否来自本次 WMI/venv launcher。"""
+        if pid == ancestor_pid:
+            return True
+        if (
+            sys.platform != "win32"
+            or not isinstance(pid, int)
+            or pid <= 0
+            or not isinstance(ancestor_pid, int)
+            or ancestor_pid <= 0
+        ):
+            return False
+        pwsh = shutil.which("pwsh.exe")
+        if not pwsh:
+            return False
+        environment = dict(os.environ)
+        environment["AGY_WORKER_DESCENDANT_PID"] = str(pid)
+        environment["AGY_WORKER_ANCESTOR_PID"] = str(ancestor_pid)
+        environment["AGY_WORKER_MAX_PARENT_DEPTH"] = str(max(1, int(max_depth)))
+        script = (
+            "$child = [int]$env:AGY_WORKER_DESCENDANT_PID; "
+            "$ancestor = [int]$env:AGY_WORKER_ANCESTOR_PID; "
+            "$depth = [int]$env:AGY_WORKER_MAX_PARENT_DEPTH; "
+            "for ($i = 0; $i -lt $depth; $i++) { "
+            "$process = Get-CimInstance -ClassName Win32_Process -Filter \"ProcessId = $child\" -ErrorAction Stop; "
+            "$parent = [int]$process.ParentProcessId; "
+            "if ($parent -eq $ancestor) { exit 0 }; "
+            "if ($parent -le 0 -or $parent -eq $child) { exit 1 }; "
+            "$child = $parent }; exit 1"
+        )
+        try:
+            result = subprocess.run(
+                [pwsh, "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=3,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return result.returncode == 0
 
     def _ensure(self, startup_timeout):
         """在同一 deadline 内反复观察 health、抢启动锁并按 cooldown 重试。"""
