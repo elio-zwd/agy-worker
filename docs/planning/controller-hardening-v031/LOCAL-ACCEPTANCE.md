@@ -1,8 +1,8 @@
 # Controller v0.3.1 最终本地 AI 严格验收协议
 
-> 适用分支：`fix/controller-hardening-v031`  
-> 规格：`SPEC.md`  
-> 实施计划：`PLAN.md`  
+> 适用分支：`fix/controller-hardening-v031`
+> 规格：`SPEC.md`
+> 实施计划：`PLAN.md`
 > 状态追踪：`TASKS.md`
 
 ## 1. 验收方式
@@ -76,10 +76,10 @@ git status --short
 ### T3：launch lock takeover / retry / WMI PID
 
 ```powershell
-& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller.py -k "simultaneous or takeover or launch_retry or wmi_launch"
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller.py -k "simultaneous or takeover or launch_retry or wmi_launch or pending_pid"
 ```
 
-重点：等待者能接管；重试间隔不形成 process storm；两个 client 仍只落到一个 healthy Controller；PID 只是诊断，health 才是 ready 真值。
+重点：等待者能接管；重试间隔不形成 process storm；共享 pending PID 不允许重复 launch；两个 client 仍只落到一个 healthy Controller；WMI 返回的 venv launcher PID 仅用于启动归属/诊断，health 中 Controller PID 与 health 本身仍是 ready 真值。
 
 ### T4：custom run-task ownership
 
@@ -111,7 +111,7 @@ git status --short
 & ./.venv/Scripts/python.exe -m pytest -q tests/test_controller_security.py
 ```
 
-重点：非法 endpoint 在任何网络访问前拒绝；ACL classifier；ACL API 失败是 unknown，不宣称安全。
+重点：非法 endpoint 在任何网络访问前拒绝；authenticated health 非 object 也受控拒绝；ACL classifier；ACL API 失败是 unknown，不宣称安全。
 
 ### T8：MCP version / package contract
 
@@ -127,7 +127,7 @@ git status --short
 & ./.venv/Scripts/python.exe -m pytest -q tests/test_controller_hardening_quality.py
 ```
 
-重点：`--fresh` 不把仍存在但不可达的旧 state 当成 `not_running`；WMI 多次 launch 使用独立环境文件；超过清理窗口的遗留 proxy 环境文件会被清理而新鲜文件不受影响。
+重点：`--fresh` 不把仍存在但不可达的旧 state 当成 `not_running`；WMI 多次 launch 使用独立环境文件；超过清理窗口的遗留 proxy 环境文件会被清理而新鲜文件不受影响；stop 必须等待 state 真正消失；Windows venv launcher 与真实 Controller PID 不同时仍能安全建立 ownership。
 
 ## 5. 权威全量检查
 
