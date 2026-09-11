@@ -44,7 +44,7 @@
       "description": "正常 MCP 调用只允许调整任务总时长；上下文/证据预算使用服务端安全默认值。",
       "properties": {
         "total_timeout_sec": {
-          "default": 300,
+          "default": 600,
           "maximum": 1800,
           "minimum": 10,
           "title": "Total Timeout Sec",

@@ -2,6 +2,8 @@
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+DEFAULT_TOTAL_TIMEOUT_SEC = 600
+
 
 class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -55,7 +57,7 @@ class Inputs(Strict):
 
 class McpLimits(Strict):
     """正常 MCP 调用只允许调整任务总时长；上下文/证据预算使用服务端安全默认值。"""
-    total_timeout_sec: int = Field(300, ge=10, le=1800)
+    total_timeout_sec: int = Field(DEFAULT_TOTAL_TIMEOUT_SEC, ge=10, le=1800)
 
 
 class Limits(McpLimits):
