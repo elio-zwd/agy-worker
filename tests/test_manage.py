@@ -165,16 +165,23 @@ def test_worker_tool_description_explicitly_prevents_direct_agy_cli_fallback():
     assert "subagent" in description
 
 
-def test_schema_generation_uses_public_status_wait_contract(monkeypatch, tmp_path):
-    """重新生成 schema 时必须保留 MCP 的 50～600 秒合同，不能泄漏内部 25 秒模型。"""
+def test_schema_generation_uses_public_timeout_contracts(monkeypatch, tmp_path):
+    """重新生成 schema 时必须保留公开任务预算与 status 等待合同。"""
     root=tmp_path/'worker'
     (root/'schemas').mkdir(parents=True)
     monkeypatch.setattr(manage,'ROOT',root)
 
     manage.schemas()
 
-    schema=json.loads((root/'schemas/agy_status.json').read_text('utf-8'))
-    wait_schema=schema['properties']['wait_ms']
+    worker_schema=json.loads((root/'schemas/agy_worker.json').read_text('utf-8'))
+    limit_ref=worker_schema['properties']['limits']['$ref'].split('/')[-1]
+    timeout_schema=worker_schema['$defs'][limit_ref]['properties']['total_timeout_sec']
+    assert timeout_schema['default']==600
+    assert timeout_schema['minimum']==10
+    assert timeout_schema['maximum']==1800
+
+    status_schema=json.loads((root/'schemas/agy_status.json').read_text('utf-8'))
+    wait_schema=status_schema['properties']['wait_ms']
     assert wait_schema['default']==50000
     assert wait_schema['minimum']==50000
     assert wait_schema['maximum']==600000
