@@ -12,11 +12,65 @@ import tomlkit
 from .common import WorkerError, atomic_json, digest
 from .controller_client import ControllerClient
 from .controller_protocol import PROTOCOL_VERSION
-from .models import (WorkerRequest,ContinueRequest,StatusRequest,CancelRequest,
+from .models import (McpWorkerRequest,McpContinueRequest,McpStatusRequest,CancelRequest,
                      ArtifactRequest,CapabilitiesRequest)
 from .security import inspect_data_dir_acl
 
 ROOT=Path(__file__).resolve().parents[2]
+CODEX_ROUTING_BEGIN="<AGY_WORKER_ROUTING>"
+CODEX_ROUTING_END="</AGY_WORKER_ROUTING>"
+CODEX_ROUTING_BLOCK=(
+    f"{CODEX_ROUTING_BEGIN}\n"
+    "路由绑定：在编译、测试、日志、浏览器、图片或 Android UI 等本 Worker 已支持任务里，`AGY`/`agy` 只指本机 `agy_worker` MCP，不指 Codex 的聊天、线程、agent 或 subagent。"
+    "例如用户说“让 AGY 跑一下编译”，直接使用 `agy_capabilities`（必要时）→ `agy_worker` → `agy_status`。"
+    "不得先列出或读取聊天/线程，不得向聊天、agent、subagent 发送消息或等待 thread；也不得直接用 shell/terminal 调用 `agy`、`agy.exe`、`agy -p`，正常任务不要先跑 `agy --help` 探测。"
+    "MCP 不可用时明确报告，不得静默回退。仅安装、更新、诊断 AGY CLI 本身或 agy-worker 维护脚本明确需要时，才可直接调用 CLI。\n"
+    f"{CODEX_ROUTING_END}"
+)
+
+
+def _split_codex_routing(text):
+    """拆出末尾 managed block；结构异常时拒绝猜测用户配置。"""
+    begin_count=text.count(CODEX_ROUTING_BEGIN)
+    end_count=text.count(CODEX_ROUTING_END)
+    if not begin_count and not end_count:
+        return text,None
+    if begin_count!=1 or end_count!=1:
+        raise ValueError("Codex developer_instructions 中存在冲突或损坏的 AGY Worker 路由指令标记，拒绝覆盖")
+    begin=text.index(CODEX_ROUTING_BEGIN)
+    end=text.index(CODEX_ROUTING_END,begin)+len(CODEX_ROUTING_END)
+    if end!=len(text):
+        raise ValueError("Codex developer_instructions 中存在冲突或损坏的 AGY Worker 路由指令标记，拒绝覆盖")
+    prefix=text[:begin]
+    if prefix:
+        if not prefix.endswith("\n\n"):
+            raise ValueError("Codex developer_instructions 中存在冲突或损坏的 AGY Worker 路由指令标记，拒绝覆盖")
+        prefix=prefix[:-2]
+    return prefix,text[begin:end]
+
+
+def _install_codex_routing(current):
+    """追加或升级末尾 Worker managed block，并原样保留用户前置指令。"""
+    if current is None:
+        return CODEX_ROUTING_BLOCK
+    text=str(current)
+    prefix,managed=_split_codex_routing(text)
+    if managed is not None:
+        return (prefix+"\n\n" if prefix else "")+CODEX_ROUTING_BLOCK
+    if not text:
+        return CODEX_ROUTING_BLOCK
+    return text+"\n\n"+CODEX_ROUTING_BLOCK
+
+
+def _remove_codex_routing(current):
+    """卸载时删除末尾 managed block，并原样保留用户前置指令。"""
+    if current is None:
+        return None
+    text=str(current)
+    prefix,managed=_split_codex_routing(text)
+    if managed is None:
+        return text
+    return prefix or None
 
 
 def register(remove=False):
@@ -26,17 +80,26 @@ def register(remove=False):
     document=tomlkit.parse(text)
     servers=document.setdefault('mcp_servers',tomlkit.table())
     name='agy_worker'
+    current_instructions=document.get('developer_instructions')
     if remove:
         current=servers.get(name)
         if current and Path(str(current.get('command',''))).resolve()!=Path(sys.executable).resolve():
             raise ValueError('已有同名 MCP 不属于本安装，拒绝移除')
+        next_instructions=_remove_codex_routing(current_instructions)
         servers.pop(name,None)
+        if next_instructions is None:
+            if current_instructions is not None:
+                document.pop('developer_instructions',None)
+        elif current_instructions is not None and next_instructions!=str(current_instructions):
+            document['developer_instructions']=next_instructions
     else:
         if name in servers and str(servers[name].get('command',''))!=str(Path(sys.executable)):
             raise ValueError('已有不同路径的同名 MCP，拒绝覆盖')
+        next_instructions=_install_codex_routing(current_instructions)
+        document['developer_instructions']=next_instructions
         servers[name]={'command':str(Path(sys.executable)),
           'args':['-m','agy_worker.server','--config',str(ROOT/'config/runtime.toml')],
-          'startup_timeout_sec':20,'tool_timeout_sec':60,
+          'startup_timeout_sec':20,'tool_timeout_sec':660,
           'env_vars':['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy','wss_proxy'],
           'enabled_tools':['agy_capabilities','agy_worker','agy_continue','agy_status','agy_cancel','agy_artifact_read']}
     if text:
@@ -72,7 +135,7 @@ def doctor():
 
 
 def schemas():
-    for name,model in [('agy_capabilities',CapabilitiesRequest),('agy_worker',WorkerRequest),('agy_continue',ContinueRequest),('agy_status',StatusRequest),('agy_cancel',CancelRequest),('agy_artifact_read',ArtifactRequest)]:
+    for name,model in [('agy_capabilities',CapabilitiesRequest),('agy_worker',McpWorkerRequest),('agy_continue',McpContinueRequest),('agy_status',McpStatusRequest),('agy_cancel',CancelRequest),('agy_artifact_read',ArtifactRequest)]:
         atomic_json(ROOT/'schemas'/(name+'.json'),model.model_json_schema(by_alias=True))
 
 

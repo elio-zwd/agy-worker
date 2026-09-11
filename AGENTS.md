@@ -14,6 +14,7 @@
 
 - 报告和有意义的代码注释使用中文，PowerShell 使用 pwsh.exe。
 - Codex 负责判断、源码分析和修复；AGY 编译任务只能执行与采集错误。
+- 在本 Worker 已支持的编译、测试、日志、浏览器、图片或 Android UI 任务里，用户所说的“AGY/agy”只指本机 `agy_worker` MCP，不指 Codex 的聊天、线程、agent 或 subagent。像“让 AGY 跑一下编译”这类请求必须使用 `agy_worker` MCP；不得先列出/读取聊天或线程，不得向聊天/subagent 发消息或等待 thread，也不得把正常任务改成 terminal/shell 直接调用 `agy`、`agy.exe`、`agy -p`，或先跑 `agy --help` 探测。MCP 不可用时应明确报告，不得静默回退。只有安装、更新、诊断 AGY CLI 本身或本仓库维护脚本明确需要时，才允许直接调用 CLI。
 - 不开放任意 shell，不修改用户原项目，只在 data/sessions 的快照中执行。
 - 权限在 hook 与私有 Broker 双重校验；当前没有通过系统级隔离验收，不能把它描述为安全沙箱。
 - config/runtime.toml 是登记工作区与命令的唯一入口。AGY 不得修改这个文件。
@@ -58,7 +59,7 @@ pwsh.exe -NoProfile -File scripts/check.ps1
 按任务需要使用以下维护入口，注意它们的实际副作用：
 
 - 安装：`pwsh.exe -NoProfile -File scripts/install.ps1 -Python '<Python解释器完整路径>'`。创建或复用 `.venv`，安装锁定依赖与浏览器依赖，并执行诊断；不升级全局 Python。
-- 注册：`pwsh.exe -NoProfile -File scripts/register.ps1`。修改 AGY 专用 Broker 和 Codex MCP 注册；配置备份位于 `work/backups`，可能含敏感信息。
+- 注册：`pwsh.exe -NoProfile -File scripts/register.ps1`。修改 AGY 专用 Broker 和 Codex MCP 注册，并向 Codex `developer_instructions` 追加带边界标记的 AGY Worker 路由规则；既有用户指令必须保留。配置备份位于 `work/backups`，可能含敏感信息。
 - Bridge 入口：`pwsh.exe -NoProfile -File scripts/start.ps1`。供 MCP 客户端使用；首个连接按需启动 Controller。
 - 停止：`pwsh.exe -NoProfile -File scripts/stop.ps1`。会取消运行中的任务，后续工具调用可重新启动 Controller。
 - 双 Bridge 验收：`& ./.venv/Scripts/python.exe scripts/verify-controller.py --config config/runtime.toml`。使用正式配置，可能启动常驻 Controller，结束后保持其运行。

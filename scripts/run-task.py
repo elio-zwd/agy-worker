@@ -14,6 +14,26 @@ from agy_worker.controller_client import ControllerClient
 ROOT=Path(__file__).resolve().parents[1]
 
 
+def tool_result_value(response):
+    """优先读取 MCP structured result，并兼容旧 Bridge 的 JSON TextContent。"""
+    structured=getattr(response,"structured_content",None)
+    if structured is not None:
+        if isinstance(structured,dict):
+            return structured
+        raise WorkerError("protocol_error","MCP structured result 必须为对象")
+    for block in getattr(response,"content",[]):
+        text=getattr(block,"text",None)
+        if not isinstance(text,str):
+            continue
+        try:
+            value=json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(value,dict):
+            return value
+    raise WorkerError("protocol_error","MCP tool 未返回可用的结构化 JSON 结果")
+
+
 async def run(args):
     request=json.loads(Path(args.request).read_text('utf-8-sig'))
     environment={key:value for key,value in os.environ.items() if key.lower().endswith('_proxy')}
@@ -34,13 +54,13 @@ async def run(args):
                 await client.initialize()
                 tool='agy_continue' if 'session_id' in request else 'agy_worker'
                 response=await client.call_tool(tool,request)
-                state=json.loads(response.content[0].text)
+                state=tool_result_value(response)
                 if 'task_id' not in state:
                     print(json.dumps(state,ensure_ascii=False,indent=2));return 1
                 print('任务已提交：'+state['task_id'],flush=True)
                 while state['status'] not in ('succeeded','failed','cancelled','timed_out','interrupted'):
                     response=await client.call_tool('agy_status',{'task_id':state['task_id'],'after_revision':state['revision'],'wait_ms':25000},read_timeout_seconds=30)
-                    state=json.loads(response.content[0].text)
+                    state=tool_result_value(response)
                 if args.output:
                     Path(args.output).write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding='utf-8')
                 print(json.dumps(state,ensure_ascii=False,indent=2),flush=True)

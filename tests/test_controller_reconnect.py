@@ -65,7 +65,7 @@ def test_mutating_request_reconnect_keeps_request_id(monkeypatch, method):
     assert calls[1]["payload"]["params"]["request_id"] == "req-fixed"
 
 
-def test_register_sets_outer_mcp_tool_timeout_to_60(tmp_path, monkeypatch):
+def test_register_sets_outer_mcp_tool_timeout_to_660(tmp_path, monkeypatch):
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
@@ -74,7 +74,7 @@ def test_register_sets_outer_mcp_tool_timeout_to_60(tmp_path, monkeypatch):
     document = tomllib.loads((codex_home / "config.toml").read_text("utf-8"))
     server = document["mcp_servers"]["agy_worker"]
     assert server["startup_timeout_sec"] == 20
-    assert server["tool_timeout_sec"] == 60
+    assert server["tool_timeout_sec"] == 660
     assert server["enabled_tools"] == [
         "agy_capabilities",
         "agy_worker",

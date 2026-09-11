@@ -39,8 +39,9 @@
       "title": "Inputs",
       "type": "object"
     },
-    "Limits": {
+    "McpLimits": {
       "additionalProperties": false,
+      "description": "正常 MCP 调用只允许调整任务总时长；上下文/证据预算使用服务端安全默认值。",
       "properties": {
         "total_timeout_sec": {
           "default": 300,
@@ -48,27 +49,14 @@
           "minimum": 10,
           "title": "Total Timeout Sec",
           "type": "integer"
-        },
-        "summary_max_bytes": {
-          "default": 16384,
-          "maximum": 16384,
-          "minimum": 2048,
-          "title": "Summary Max Bytes",
-          "type": "integer"
-        },
-        "artifact_max_bytes": {
-          "default": 536870912,
-          "maximum": 536870912,
-          "minimum": 1048576,
-          "title": "Artifact Max Bytes",
-          "type": "integer"
         }
       },
-      "title": "Limits",
+      "title": "McpLimits",
       "type": "object"
     },
-    "Permissions": {
+    "McpPermissions": {
       "additionalProperties": false,
+      "description": "Codex 可直接申请的当前公开权限；未开放能力不进入 MCP schema。",
       "properties": {
         "build": {
           "default": false,
@@ -136,39 +124,9 @@
           "default": false,
           "title": "Vision",
           "type": "boolean"
-        },
-        "shell": {
-          "default": false,
-          "title": "Shell",
-          "type": "boolean"
-        },
-        "code_write": {
-          "default": false,
-          "title": "Code Write",
-          "type": "boolean"
-        },
-        "write_paths": {
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 30,
-          "title": "Write Paths",
-          "type": "array"
-        },
-        "write_reason": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Write Reason"
         }
       },
-      "title": "Permissions",
+      "title": "McpPermissions",
       "type": "object"
     }
   },
@@ -208,8 +166,7 @@
         "log",
         "browser",
         "android-ui",
-        "vision",
-        "shell"
+        "vision"
       ],
       "title": "Kind",
       "type": "string"
@@ -221,13 +178,13 @@
       "type": "string"
     },
     "permissions": {
-      "$ref": "#/$defs/Permissions"
+      "$ref": "#/$defs/McpPermissions"
     },
     "inputs": {
       "$ref": "#/$defs/Inputs"
     },
     "limits": {
-      "$ref": "#/$defs/Limits"
+      "$ref": "#/$defs/McpLimits"
     },
     "session_id": {
       "title": "Session Id",
@@ -247,6 +204,6 @@
     "session_id",
     "expected_turn"
   ],
-  "title": "ContinueRequest",
+  "title": "McpContinueRequest",
   "type": "object"
 }

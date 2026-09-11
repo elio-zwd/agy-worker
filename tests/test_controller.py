@@ -117,7 +117,11 @@ def test_two_stdio_bridges_share_controller(tmp_path, monkeypatch):
                 "agy_artifact_read",
                 {"task_id": task_id, "artifact_id": "bridge-evidence", "view": "text"},
             )
-            assert artifact.structured_content["text"] == "跨 Bridge 证据"
+            assert artifact.structured_content is None
+            assert len(artifact.content) == 1
+            assert artifact.content[0].type == "text"
+            payload = json.loads(artifact.content[0].text)
+            assert payload["text"] == "跨 Bridge 证据"
 
         # 两个 Bridge 都退出后，独立 Controller 仍可响应。
         assert ControllerClient(config).call("status", {"task_id": task_id})["status"] == "queued"

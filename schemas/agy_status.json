@@ -1,5 +1,6 @@
 {
   "additionalProperties": false,
+  "description": "Codex 可选择的单次 MCP 总等待预算；省略时默认 50 秒。",
   "properties": {
     "task_id": {
       "title": "Task Id",
@@ -18,9 +19,9 @@
       "title": "After Revision"
     },
     "wait_ms": {
-      "default": 0,
-      "maximum": 25000,
-      "minimum": 0,
+      "default": 50000,
+      "maximum": 600000,
+      "minimum": 50000,
       "title": "Wait Ms",
       "type": "integer"
     }
@@ -28,6 +29,6 @@
   "required": [
     "task_id"
   ],
-  "title": "StatusRequest",
+  "title": "McpStatusRequest",
   "type": "object"
 }
