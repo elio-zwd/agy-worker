@@ -41,6 +41,7 @@
     },
     "McpLimits": {
       "additionalProperties": false,
+      "description": "正常 MCP 调用只允许调整任务总时长；上下文/证据预算使用服务端安全默认值。",
       "properties": {
         "total_timeout_sec": {
           "default": 300,
@@ -55,6 +56,7 @@
     },
     "McpPermissions": {
       "additionalProperties": false,
+      "description": "Codex 可直接申请的当前公开权限；未开放能力不进入 MCP schema。",
       "properties": {
         "build": {
           "default": false,
