@@ -1,5 +1,6 @@
 {
   "additionalProperties": false,
+  "description": "Codex 可选择的单次 MCP 总等待预算；省略时默认 50 秒。",
   "properties": {
     "task_id": {
       "title": "Task Id",
