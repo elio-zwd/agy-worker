@@ -1,15 +1,30 @@
-"""锁定 v0.3.2 后续问题的目标行为；实现前这些断言应在旧代码上失败。"""
+"""锁定 v0.3.2 后续问题的修复目标，并保护既有 fail-closed 边界。"""
 import pytest
 from pydantic import ValidationError
 
 import agy_worker.server as server_module
 from agy_worker.models import Limits, McpLimits, McpStatusRequest
+from agy_worker.runtime import Runtime
 
 
 def test_default_task_budget_is_600_seconds():
     """默认任务预算应覆盖已观察到的约 267 秒构建以及合理的前置开销。"""
     assert McpLimits().total_timeout_sec == 600
     assert Limits().total_timeout_sec == 600
+
+
+def test_runtime_capabilities_reports_same_default_task_budget():
+    """冷资源里的能力声明必须与实际请求模型使用同一个默认值。"""
+    runtime = Runtime.__new__(Runtime)
+    runtime.config = {"enabled_kinds": [], "workspaces": {}}
+
+    capabilities = runtime.capabilities()
+
+    assert capabilities["limits"]["total_timeout_sec"] == {
+        "default": 600,
+        "min": 10,
+        "max": 1800,
+    }
 
 
 def test_public_status_contract_still_rejects_internal_short_poll_value():
