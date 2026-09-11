@@ -1,12 +1,12 @@
 # AGY Worker v0.3.2 低上下文状态 Task Tracker
 
-> 本文件是 `perf/context-efficient-status-v032` 的**唯一当前进度状态源**。
+> 本文件是 `perf/context-efficient-status-v032` 的最终验收状态源。
 > Base：`b51d81701f3cfe3859c485f87e42a03b22b4e3d7`
 
-## 当前总状态
+## 最终状态
 
 ```text
-phase: adaptive_status_wait_recheck_round2_awaiting_local
+phase: accepted_for_merge
 branch: perf/context-efficient-status-v032
 base: b51d81701f3cfe3859c485f87e42a03b22b4e3d7
 adaptive_wait_runtime_code_head: 02201bd5b779117fb9e04c808b36e95ea80996be
@@ -23,49 +23,51 @@ public_status_wait_min_ms: 50000
 public_status_wait_max_ms: 600000
 internal_status_slice_max_ms: 25000
 codex_mcp_tool_timeout_sec: 660
-current_windows_check: fail_at_3086915_109_passed_5_failed_0_skipped_2_warnings
-current_schema_regeneration: drift_at_3086915_three_generated_schemas_description_only
-current_register_recheck: pass_at_3086915_tool_timeout_660_config_preserved
-current_real_codex_route: not_run_at_3086915
-open_findings: rerun_windows_schema_and_real_codex_on_802f404
-merge_authorized: false
-open_pr: "#2_draft"
+windows_check: pass_114_passed_0_failed_0_skipped_0_warnings
+schema_regeneration: pass_no_diff
+register_recheck: pass_tool_timeout_660_config_preserved
+real_codex_route: pass_core_flow
+merge_authorized: true
+open_pr: "#2"
 ```
 
-## 当前复验结论
+## 自动化与生成物验收
 
-首轮自适应本地复验在 `3086915...` 为 FAIL：`scripts/check.ps1` exit 1，pytest 109 passed / 5 failed，compileall PASS，diff-check PASS；schema regeneration 有 3 个 description drift；注册 660 已通过；真实新 Codex 会话未执行。
-
-ChatGPT 按 `receiving-code-review + systematic-debugging` 技术复核后确认：4 个 StopIteration 来自测试 patch 共享标准库 `time.monotonic` 污染 asyncio；第 5 个失败来自旧测试仍断言 `tool_timeout_sec=60`；三个 schema drift 来自 Pydantic 模型 docstring 自动生成的 `description` 未同步到 tracked generated files。
-
-对应修补：
-
-- `590629e...`：新增 `tests/conftest.py` 隔离 server 测试时钟，不修改生产 deadline 逻辑；
-- `3a6d703...`：旧注册测试合同从 60 同步为 660；
-- `aa8fc85...` / `0dda8b1...` / `802f404...`：同步 worker/continue/status generated schema description。
-
-固定二次复验 target：
+2026-09-11 本地复验得到：
 
 ```text
-802f40405ea74ede2b437887ff6ba9dd2daa2edb
+scripts/check.ps1: exit 0
+pytest: 114 passed / 0 failed / 0 skipped / 0 warnings
+compileall: PASS
+StopIteration: absent
+git diff --check: exit 0
+python -m agy_worker.manage schemas: exit 0
+git diff -- schemas: empty
+Codex MCP tool_timeout_sec: 660
+user developer instructions: preserved
+other MCP config: preserved
 ```
 
-远端 compare 已确认 `3086915... → 802f404...` 只修改 `tests/conftest.py`、`tests/test_controller_reconnect.py` 和三个 `schemas/*.json`；没有 `src/`、Runtime、Controller、权限、协议、config、依赖或 `AGENTS.md` 变化。target 后只有验收/Task 文档变化。
+此前 `3086915...` 的 5 个 pytest 失败已经完成技术复核并关闭：4 个 `StopIteration` 来自测试 patch 共享标准库 `time.monotonic` 污染 asyncio；第 5 个来自遗留测试仍断言旧 `tool_timeout_sec=60`。三个 schema drift 是 Pydantic docstring 自动生成 `description` 后 tracked generated files 未同步。对应修补固定在 `802f404...`，没有修改 Runtime/Controller 权限或协议语义。
 
-## 下一轮门禁
+## 真实 Codex / AGY 验收
 
-严格执行 `docs/planning/context-efficient-status-v032/LOCAL-ROUTING-RECHECK.md`：
+用户随后在真实业务项目中连续执行 AGY 编译测试：
 
-- [ ] `scripts/check.ps1` exit 0 / pytest 0 failed / compileall PASS，并确认 StopIteration 消失；
-- [ ] `python -m agy_worker.manage schemas` 后 `git diff -- schemas` 为空；
-- [ ] 注册仍为 `tool_timeout_sec=660` 且用户配置/其他 MCP 保留；
-- [ ] 新 Codex 会话只发“使用AGY跑编译测试”，验证第一笔 worker、无 discovery/direct CLI/chat-thread、真实自适应 status、同会话 terminal 和 operation exit code；
-- [ ] ChatGPT 收到新鲜证据后再执行 `verification-before-completion`。
+1. 第一次 `jianyu_compile_test`：`succeeded`，operation exit code `0`，约 225 秒，errors `0`，warnings `25`；Codex 可见流程为 `agy_capabilities → agy_worker → agy_status`，单次可见 status 直接返回 terminal。
+2. 第二次相同命令：`succeeded`，operation exit code `0`，约 201 秒，errors `0`，warnings `25`；已知 workspace 后直接 `agy_worker → agy_status`，单次可见 status 直接返回 terminal。
+3. 第三次相同命令：Worker 正常提交并等待，最终 `failed` / operation exit code `130` / `termination_reason=timed_out`，命令进程约 267 秒；日志停在 `:app:kspDebugUnitTestKotlin` 附近，没有编译错误或测试断言失败。
+
+前两次 201～225 秒任务均通过单个 Codex 可见 `agy_status` 调用等到 terminal，证明 v0.3.2 的长等待/coalescing 核心目标在真实使用中生效。第三次失败属于后续已知问题，不判定为本 PR 的功能回归：Worker 的任务 `total_timeout_sec` 默认是 300 秒，而真正启动命令时使用“总预算减去前置 AGY/快照/调度耗时”的剩余时间，因此进程约 267 秒被终止与该默认预算相符。
+
+真实 follow-up 还观察到一次 Codex 主动发送低于公开下限的 `agy_status.wait_ms`，被 MCP 以 `invalid_request: wait_ms 最小为 50000` 正确拒绝，随后重试取得既有 terminal。这是调用侧易用性问题，当前 fail-closed 行为正确，也不阻塞本版本使用。
+
+上述两个非阻断问题（长构建默认任务预算不足、follow-up status 偶发选择非法短等待）不在 PR #2 内继续修复；合并后单独建立后续 Draft PR 记录，当前项目暂停继续开发。
 
 ## Merge Gate
 
 ```text
-merge_authorized: false
+merge_authorized: true
 ```
 
-PR #2 保持 Draft。当前不得描述为完成或可合并；未经用户明确授权，不 merge `main`、不删除 branch、不启用 auto-merge、不重写历史。
+2026-09-11 用户明确授权将 PR #2 合并到 `main`。采用 merge commit 保留完整开发与修补历史；不启用 auto-merge，不删除远端分支。
