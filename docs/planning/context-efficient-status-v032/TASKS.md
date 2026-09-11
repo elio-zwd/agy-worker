@@ -15,7 +15,6 @@ adaptive_wait_clock_test_fix_head: 590629e98b475b20b050e39d4e357fa5a11314b6
 adaptive_wait_timeout_test_fix_head: 3a6d7037a474340147dff63aac36ffe36dace160
 adaptive_wait_schema_description_sync_head: 802f40405ea74ede2b437887ff6ba9dd2daa2edb
 adaptive_wait_recheck_target_head: 802f40405ea74ede2b437887ff6ba9dd2daa2edb
-local_recheck_round2_doc_head: 8cb26f9e6abb6580e65f927b281640277ad7b5dc
 package: 0.3.2
 controller_protocol: 2
 mcp_tool_count: 6
@@ -51,7 +50,7 @@ ChatGPT 按 `receiving-code-review + systematic-debugging` 技术复核后确认
 802f40405ea74ede2b437887ff6ba9dd2daa2edb
 ```
 
-远端 compare 已确认 `3086915... → 802f404...` 只修改 `tests/conftest.py`、`tests/test_controller_reconnect.py` 和三个 `schemas/*.json`；没有 `src/`、Runtime、Controller、权限、协议、config、依赖或 `AGENTS.md` 变化。target 后只有 `docs/planning/context-efficient-status-v032/LOCAL-ROUTING-RECHECK.md` 与 `TASKS.md` 文档变化。
+远端 compare 已确认 `3086915... → 802f404...` 只修改 `tests/conftest.py`、`tests/test_controller_reconnect.py` 和三个 `schemas/*.json`；没有 `src/`、Runtime、Controller、权限、协议、config、依赖或 `AGENTS.md` 变化。target 后只有验收/Task 文档变化。
 
 ## 下一轮门禁
 
