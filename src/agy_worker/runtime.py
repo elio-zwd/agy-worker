@@ -22,7 +22,7 @@ from .browser import Browser
 from .common import WorkerError, atomic_json, digest, now, redact, redact_value, safe_path
 from .logs import extract
 from .models import (WorkerRequest, ContinueRequest, StatusRequest, CancelRequest,
-                     ArtifactRequest)
+                     ArtifactRequest, DEFAULT_TOTAL_TIMEOUT_SEC)
 from .controller_protocol import PROTOCOL_VERSION
 from .processes import run_process
 
@@ -256,7 +256,7 @@ class Runtime:
         return {"schema_version":1,"enabled_kinds":self.config["enabled_kinds"],
                 "controller":{"protocol_version":PROTOCOL_VERSION,"single_runtime":True,
                               "max_concurrent_tasks":MAX_CONCURRENT_TASKS,"max_inflight_tasks":MAX_INFLIGHT_TASKS},
-                "limits":{"total_timeout_sec":{"default":300,"min":10,"max":1800},
+                "limits":{"total_timeout_sec":{"default":DEFAULT_TOTAL_TIMEOUT_SEC,"min":10,"max":1800},
                           "summary_max_bytes":{"default":16384,"min":2048,"max":16384},
                           "artifact_max_bytes":{"default":536870912,"min":1048576,"max":536870912}},
                 "workspaces":workspaces,
