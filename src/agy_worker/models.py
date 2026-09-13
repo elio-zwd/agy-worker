@@ -115,6 +115,13 @@ class CancelRequest(Strict):
     reason: str = Field("Codex 请求取消", max_length=500)
 
 
+class AnswerRequest(Strict):
+    """领导 AI 对当前成员 pending question 的严格回复合同。"""
+    task_id: str = Field(min_length=1, max_length=100, pattern=r"^[\w.-]+$")
+    question_id: str = Field(min_length=1, max_length=100, pattern=r"^[\w.-]+$")
+    answer: str = Field(min_length=1, max_length=8000)
+
+
 class ArtifactRequest(Strict):
     task_id: str
     artifact_id: str
