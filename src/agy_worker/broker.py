@@ -8,13 +8,13 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
 SCHEMA = {"type": "object", "properties": {
-    "action": {"type": "string", "enum": ["execute", "read_log", "browser", "android", "image"]},
+    "action": {"type": "string", "enum": ["execute", "read_log", "browser", "android", "image", "ask_leader"]},
     "arguments": {"type": "object"}}, "required": ["action"], "additionalProperties": False}
 
 
 async def list_tools(context, params):
     return types.ListToolsResult(tools=[types.Tool(name="worker_action",
-        description="执行当前 Worker 授权范围内的操作。execute 不需要命令参数；read_log 接受 start_line/line_count；browser 接受 tool/arguments；android 接受 operation；image 接受 index。不得调用原生 shell 或其他 MCP 绕过。",
+        description="执行当前 Worker 授权范围内的操作。execute 不需要命令参数；read_log 接受 start_line/line_count；browser 接受 tool/arguments；android 接受 operation；image 接受 index；ask_leader 只接受 question，用于确实需要上级业务判断或上下文时向领导 AI 提问并等待答复。ask_leader 不扩大任何环境权限。不得调用原生 shell 或其他 MCP 绕过。",
         inputSchema=SCHEMA)])
 
 
