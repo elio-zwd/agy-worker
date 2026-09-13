@@ -13,7 +13,7 @@ from .common import WorkerError, atomic_json, digest
 from .controller_client import ControllerClient
 from .controller_protocol import PROTOCOL_VERSION
 from .models import (McpWorkerRequest,McpContinueRequest,McpStatusRequest,CancelRequest,
-                     ArtifactRequest,CapabilitiesRequest)
+                     AnswerRequest,ArtifactRequest,CapabilitiesRequest)
 from .security import inspect_data_dir_acl
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -22,7 +22,7 @@ CODEX_ROUTING_END="</AGY_WORKER_ROUTING>"
 CODEX_ROUTING_BLOCK=(
     f"{CODEX_ROUTING_BEGIN}\n"
     "路由绑定：在编译、测试、日志、浏览器、图片或 Android UI 等本 Worker 已支持任务里，`AGY`/`agy` 只指本机 `agy_worker` MCP，不指 Codex 的聊天、线程、agent 或 subagent。"
-    "例如用户说“让 AGY 跑一下编译”，直接使用 `agy_capabilities`（必要时）→ `agy_worker` → `agy_status`。"
+    "例如用户说“让 AGY 跑一下编译”，直接使用 `agy_capabilities`（必要时）→ `agy_worker` → `agy_status`；若 status 返回 leader_question，则用 `agy_answer` 回复该成员问题后继续 status。"
     "不得先列出或读取聊天/线程，不得向聊天、agent、subagent 发送消息或等待 thread；也不得直接用 shell/terminal 调用 `agy`、`agy.exe`、`agy -p`，正常任务不要先跑 `agy --help` 探测。"
     "MCP 不可用时明确报告，不得静默回退。仅安装、更新、诊断 AGY CLI 本身或 agy-worker 维护脚本明确需要时，才可直接调用 CLI。\n"
     f"{CODEX_ROUTING_END}"
@@ -101,7 +101,7 @@ def register(remove=False):
           'args':['-m','agy_worker.server','--config',str(ROOT/'config/runtime.toml')],
           'startup_timeout_sec':20,'tool_timeout_sec':660,
           'env_vars':['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy','wss_proxy'],
-          'enabled_tools':['agy_capabilities','agy_worker','agy_continue','agy_status','agy_cancel','agy_artifact_read']}
+          'enabled_tools':['agy_capabilities','agy_worker','agy_continue','agy_status','agy_answer','agy_cancel','agy_artifact_read']}
     if text:
         backup=ROOT/'work/backups'/('codex-config-'+datetime.now().strftime('%Y%m%d-%H%M%S')+'.toml')
         backup.parent.mkdir(parents=True,exist_ok=True)
@@ -135,7 +135,7 @@ def doctor():
 
 
 def schemas():
-    for name,model in [('agy_capabilities',CapabilitiesRequest),('agy_worker',McpWorkerRequest),('agy_continue',McpContinueRequest),('agy_status',McpStatusRequest),('agy_cancel',CancelRequest),('agy_artifact_read',ArtifactRequest)]:
+    for name,model in [('agy_capabilities',CapabilitiesRequest),('agy_worker',McpWorkerRequest),('agy_continue',McpContinueRequest),('agy_status',McpStatusRequest),('agy_answer',AnswerRequest),('agy_cancel',CancelRequest),('agy_artifact_read',ArtifactRequest)]:
         atomic_json(ROOT/'schemas'/(name+'.json'),model.model_json_schema(by_alias=True))
 
 

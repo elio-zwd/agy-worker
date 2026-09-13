@@ -1,8 +1,8 @@
 # 项目工作要求
 
-这是 Windows 10 x64 的本地 AGY Worker，使用官方 MCP Python SDK。部署基准为 Python 3.13，包声明支持 Python 3.13～3.14。对外提供六个 MCP 工具（一个能力发现、五个任务工具）及两个只读资源。
+这是 Windows 10 x64 的本地 AGY Worker，使用官方 MCP Python SDK。部署基准为 Python 3.13，包声明支持 Python 3.13～3.14。对外提供七个 MCP 工具（一个能力发现、六个任务/协作工具）及两个只读资源。
 
-调用链：Codex → 一次性 stdio Bridge → 常驻 Controller / 唯一 Runtime → AGY CLI → 私有 Broker → 已授权执行器。Controller 唯一持有 Runtime 与 runtime.lock。
+调用链：Codex → 一次性 stdio Bridge → 常驻 Controller / 唯一 CollaborativeRuntime → AGY CLI → 私有 Broker → 已授权执行器。Controller 唯一持有 Runtime 与 runtime.lock；AGY 成员只能通过私有 `ask_leader` 向 Codex/GPT 领导发起受控咨询，领导通过公开 `agy_answer` 回答。
 
 ## 接手顺序
 
@@ -13,13 +13,15 @@
 ## 架构与权限边界
 
 - 报告和有意义的代码注释使用中文，PowerShell 使用 pwsh.exe。
-- Codex 负责判断、源码分析和修复；AGY 编译任务只能执行与采集错误。
+- Codex/GPT 是领导 AI，负责判断、源码分析和修复；AGY 是成员 AI，负责受控执行与证据采集。成员只有在继续任务确实缺少业务判断、选择或必要上下文时，才能用 `ask_leader` 咨询领导；该问答不能扩大 shell、源码写入、浏览器、Android、其他 MCP 等任何现有权限。
+- 编译任务只能执行与采集错误；`ask_leader` 不能把编译成员变成分析/修复代理，也不能绕过任务原本的权限与目标。
 - 在本 Worker 已支持的编译、测试、日志、浏览器、图片或 Android UI 任务里，用户所说的“AGY/agy”只指本机 `agy_worker` MCP，不指 Codex 的聊天、线程、agent 或 subagent。像“让 AGY 跑一下编译”这类请求必须使用 `agy_worker` MCP；不得先列出/读取聊天或线程，不得向聊天/subagent 发消息或等待 thread，也不得把正常任务改成 terminal/shell 直接调用 `agy`、`agy.exe`、`agy -p`，或先跑 `agy --help` 探测。MCP 不可用时应明确报告，不得静默回退。只有安装、更新、诊断 AGY CLI 本身或本仓库维护脚本明确需要时，才允许直接调用 CLI。
 - 不开放任意 shell，不修改用户原项目，只在 data/sessions 的快照中执行。
 - 权限在 hook 与私有 Broker 双重校验；当前没有通过系统级隔离验收，不能把它描述为安全沙箱。
+- `ask_leader` 只传受限文本问题，并在同一任务总超时内等待；每个 task 最多 8 次。公开 `agy_status` 返回 `leader_question` 后，领导必须使用其中原样的 task_id/question_id 调用 `agy_answer`，不得猜测 ID。
 - config/runtime.toml 是登记工作区与命令的唯一入口。AGY 不得修改这个文件。
 - scripts/check.ps1 为权威检查入口。真实 AGY 验收会使用当前登录账号。
-- 多 Bridge 必须共享同一 Controller；Bridge 退出不能停止 Runtime，Controller 重启不能自动重做未完成任务。
+- 多 Bridge 必须共享同一 Controller；Bridge 退出不能停止 Runtime，Controller 重启不能自动重做未完成任务。重启会使未完成任务（包括待回答问题）进入 interrupted，不恢复旧问答等待。
 - data/、work/、.venv/ 和 vendor/browser/node_modules/ 不提交。
 - 不删除或覆盖 C:/Users/70455/.gemini 下用户既有配置；仅管理 agy-worker-broker 条目。
 - 源码写入与 shell 类型当前显式拒绝，不能通过添加兼容分支或移除检查来打开。
@@ -28,15 +30,16 @@
 
 | 位置 | 职责 |
 |---|---|
-| `src/agy_worker/server.py` | 公开 MCP 工具、只读资源和参数校验反馈 |
+| `src/agy_worker/server.py` | 公开 MCP 工具、只读资源、leader_question 路由和参数校验反馈 |
 | `src/agy_worker/models.py`、`schemas/` | 请求模型与公开 JSON Schema |
 | `src/agy_worker/controller*.py` | 常驻服务、本机通信协议、Bridge 客户端与启动协调 |
-| `src/agy_worker/runtime.py` | 任务、会话、快照、授权与执行调度 |
-| `src/agy_worker/broker.py`、`hook.py` | 私有执行入口与双重权限校验 |
+| `src/agy_worker/runtime.py` | 基础任务、会话、快照、授权与执行调度 |
+| `src/agy_worker/collaboration.py` | 在基础 Runtime 上叠加成员提问、领导答复、问答幂等与等待生命周期 |
+| `src/agy_worker/broker.py`、`hook.py` | 私有执行/提问入口与双重权限校验 |
 | `src/agy_worker/processes.py`、`browser.py` | 进程树生命周期与浏览器执行 |
 | `src/agy_worker/artifacts.py`、`logs.py` | 证据存取、脱敏与构建诊断提取 |
 | `src/agy_worker/manage.py`、`scripts/` | 本机安装、接入、诊断与工具链适配 |
-| `tests/` | 权限、路径、快照、Controller、进程与日志回归测试 |
+| `tests/` | 权限、路径、快照、Controller、协作、进程与日志回归测试 |
 
 ## 常用命令
 
@@ -49,8 +52,8 @@ pwsh.exe -NoProfile -File scripts/doctor.ps1
 # 权威检查：源码编译检查与完整 pytest。
 pwsh.exe -NoProfile -File scripts/check.ps1
 
-# 按变更范围运行测试，例如 Controller 生命周期。
-& ./.venv/Scripts/python.exe -m pytest -q tests/test_controller.py
+# 按变更范围运行测试，例如领导/成员协作。
+& ./.venv/Scripts/python.exe -m pytest -q tests/test_leader_member_questions.py
 
 # 修改请求模型后重新生成公开 Schema，并检查差异。
 & ./.venv/Scripts/python.exe -m agy_worker.manage schemas
@@ -70,6 +73,6 @@ pwsh.exe -NoProfile -File scripts/check.ps1
 - 使用满足当前需求的简单、模块化实现；删除过时代码，不添加兼容层、migration 或 fallback。
 - 注释使用简体中文，说明非显然的约束、并发、重试与生命周期原因；修改逻辑时同步修正失效注释。
 - 修改公开请求时同步模型、生成 Schema、示例与相关说明；不得只修改生成文件。
-- 修改权限、快照、取消或 Controller 生命周期时，补充或运行对应回归测试。最终执行 `scripts/check.ps1`；仅文档修改可检查命令准确性与差异，无需重复运行无关测试。
-- `doctor.ps1` 和单元测试通过不代表真实 AGY、HBuilderX 或系统隔离验收通过。构建结果必须核对命令退出码与产物；Android 资源导出不等于 APK 打包或真机测试。
+- 修改权限、快照、取消、协作问答或 Controller 生命周期时，补充或运行对应回归测试。最终执行 `scripts/check.ps1`；仅文档修改可检查命令准确性与差异，无需重复运行无关测试。
+- `doctor.ps1` 和单元测试通过不代表真实 AGY、领导/成员问答闭环、HBuilderX 或系统隔离验收通过。构建结果必须核对命令退出码与产物；Android 资源导出不等于 APK 打包或真机测试。
 - 完成前检查 `git diff --check` 和工作区差异，报告改动、实际验证结果及未验证部分。提交信息使用 `英文类型: 中文说明`，例如 `docs: 完善项目初始化指南`。

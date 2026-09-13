@@ -1,0 +1,33 @@
+{
+  "additionalProperties": false,
+  "description": "领导 AI 对当前成员 pending question 的严格回复合同；Runtime 另按 UTF-8 bytes 收紧。",
+  "properties": {
+    "task_id": {
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[\\w.-]+$",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "question_id": {
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[\\w.-]+$",
+      "title": "Question Id",
+      "type": "string"
+    },
+    "answer": {
+      "maxLength": 8192,
+      "minLength": 1,
+      "title": "Answer",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "question_id",
+    "answer"
+  ],
+  "title": "AnswerRequest",
+  "type": "object"
+}
