@@ -116,10 +116,10 @@ class CancelRequest(Strict):
 
 
 class AnswerRequest(Strict):
-    """领导 AI 对当前成员 pending question 的严格回复合同。"""
+    """领导 AI 对当前成员 pending question 的严格回复合同；Runtime 另按 UTF-8 bytes 收紧。"""
     task_id: str = Field(min_length=1, max_length=100, pattern=r"^[\w.-]+$")
     question_id: str = Field(min_length=1, max_length=100, pattern=r"^[\w.-]+$")
-    answer: str = Field(min_length=1, max_length=8000)
+    answer: str = Field(min_length=1, max_length=8192)
 
 
 class ArtifactRequest(Strict):
