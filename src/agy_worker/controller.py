@@ -16,7 +16,7 @@ from .controller_state import (
     controller_implementation_sha256,
     implementation_version,
 )
-from .runtime import Runtime
+from .collaboration import CollaborativeRuntime as Runtime
 
 
 class ControllerService:
