@@ -11,6 +11,7 @@ PACKAGE_NAME = "elio-agy-worker"
 CONTROLLER_IMPLEMENTATION_FILES = (
     "artifacts.py",
     "browser.py",
+    "collaboration.py",
     "common.py",
     "controller.py",
     "controller_protocol.py",
