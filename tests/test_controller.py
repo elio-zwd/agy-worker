@@ -91,8 +91,8 @@ def test_two_stdio_bridges_share_controller(tmp_path, monkeypatch):
         async with AsyncExitStack() as stack:
             first = await stack.enter_async_context(bridge(config))
             second = await stack.enter_async_context(bridge(config))
-            assert len((await first.list_tools()).tools) == 6
-            assert len((await second.list_tools()).tools) == 6
+            assert len((await first.list_tools()).tools) == 7
+            assert len((await second.list_tools()).tools) == 7
 
             submitted = await first.call_tool(
                 "agy_worker",
@@ -180,6 +180,48 @@ def test_restart_marks_active_task_interrupted_and_keeps_artifact(tmp_path, monk
             {"task_id": submitted["task_id"], "artifact_id": "saved", "view": "text"},
         )
         assert artifact["value"]["text"] == "保留的历史证据"
+    finally:
+        second.close()
+
+
+def test_restart_closes_persisted_leader_question(tmp_path, monkeypatch):
+    config = make_config(tmp_path)
+    first = ControllerService(config)
+    monkeypatch.setattr(first.runtime.pool, "submit", lambda *args: None)
+    request = {
+        "request_id": "restart-question-test",
+        "workspace_id": "demo",
+        "kind": "build",
+        "objective": "验证重启时清理成员问题",
+        "permissions": {"build": True},
+        "inputs": {"command_id": "compile"},
+    }
+    existing_client = ControllerClient(config)
+    submitted = existing_client.call("submit", request)
+    context = first.runtime.active[submitted["task_id"]]
+    context["record"]["status"] = "running"
+    context["record"]["leader_question"] = {
+        "question_id": "question-restart-test",
+        "question": "重启前的问题",
+        "created_at": "2026-09-13T00:00:00Z",
+    }
+    first.runtime._save(context["record"])
+    first.close()
+
+    second = ControllerService(config)
+    try:
+        status = existing_client.call("status", {"task_id": submitted["task_id"]})
+        assert status["status"] == "interrupted"
+        assert "leader_question" not in status
+        row = second.runtime.db.execute(
+            "SELECT record FROM tasks WHERE id=?", (submitted["task_id"],)
+        ).fetchone()
+        record = json.loads(row[0])
+        assert "leader_question" not in record
+        assert record["leader_dialogue"][-1]["status"] == "interrupted"
+        audit = (context["directory"] / "audit.ndjson").read_text(encoding="utf-8")
+        assert '"event": "leader_question_closed"' in audit
+        assert '"reason": "interrupted"' in audit
     finally:
         second.close()
 

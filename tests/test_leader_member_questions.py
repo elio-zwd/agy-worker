@@ -159,7 +159,7 @@ def test_question_utf8_budget_and_per_task_quota_fail_closed(runtime):
 def test_private_broker_exposes_only_bounded_leader_question_action():
     result=asyncio.run(broker_module.list_tools(None,None))
     tool=result.tools[0]
-    schema=tool.inputSchema
+    schema=tool.input_schema
     assert 'ask_leader' in schema['properties']['action']['enum']
     assert 'shell' not in schema['properties']['action']['enum']
     assert '其他 MCP' in tool.description or '其他 MCP' in str(tool.description)

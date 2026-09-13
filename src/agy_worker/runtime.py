@@ -85,6 +85,23 @@ class Runtime:
         for row in self.db.execute("SELECT record FROM tasks").fetchall():
             record = json.loads(row[0])
             if record["status"] not in TERMINAL:
+                # 重启后没有旧 context 可以继续等待；把持久 pending 问题关闭为
+                # interrupted，避免它看起来仍可回答，也避免后续诊断误判为活跃等待。
+                pending = record.pop("leader_question", None)
+                if pending:
+                    record.setdefault("leader_dialogue", []).append({
+                        **pending,
+                        "status": "interrupted",
+                        "closed_at": now(),
+                    })
+                    audit_path = self.root / "tasks" / record["task_id"] / "audit.ndjson"
+                    with audit_path.open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps({
+                            "time": now(),
+                            "event": "leader_question_closed",
+                            "question_id": pending.get("question_id"),
+                            "reason": "interrupted",
+                        }, ensure_ascii=False) + "\n")
                 record.update(status="interrupted", error={"code": "runtime_restarted", "message": "服务重启，未自动重做任务"})
                 self._save(record)
         runtime = self

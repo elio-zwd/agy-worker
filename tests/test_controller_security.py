@@ -182,6 +182,7 @@ def test_controller_implementation_digest_matches_fixed_persistent_module_set():
     relative_files = (
         "controller.py",
         "controller_protocol.py",
+        "collaboration.py",
         "runtime.py",
         "common.py",
         "models.py",

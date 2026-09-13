@@ -80,6 +80,7 @@ def test_register_sets_outer_mcp_tool_timeout_to_660(tmp_path, monkeypatch):
         "agy_worker",
         "agy_continue",
         "agy_status",
+        "agy_answer",
         "agy_cancel",
         "agy_artifact_read",
     ]

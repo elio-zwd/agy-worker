@@ -59,7 +59,7 @@ async def run(args):
                     print(json.dumps(state,ensure_ascii=False,indent=2));return 1
                 print('任务已提交：'+state['task_id'],flush=True)
                 while state['status'] not in ('succeeded','failed','cancelled','timed_out','interrupted'):
-                    response=await client.call_tool('agy_status',{'task_id':state['task_id'],'after_revision':state['revision'],'wait_ms':25000},read_timeout_seconds=30)
+                    response=await client.call_tool('agy_status',{'task_id':state['task_id'],'after_revision':state['revision'],'wait_ms':50000},read_timeout_seconds=70)
                     state=tool_result_value(response)
                 if args.output:
                     Path(args.output).write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding='utf-8')
