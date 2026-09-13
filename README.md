@@ -4,9 +4,11 @@
 
 ## 分工
 
-Codex/GPT 负责需求、总控、判断、源码分析和核心修改。AGY 负责执行受控任务、读取高噪声内容、整理事实和证据。编译任务只采集错误原文与定位，不分析原因、不修代码。浏览器的 click 等细节只存在于 Worker 内部，不作为 Codex 的公开工具。
+Codex/GPT 是领导 AI，负责需求、总控、判断、源码分析和核心修改。AGY 是成员 AI，负责执行受控任务、读取高噪声内容、整理事实和证据。编译任务只采集错误原文与定位，不分析原因、不修代码。浏览器的 click 等细节只存在于 Worker 内部，不作为 Codex 的公开工具。
 
-实际链路：Codex → 一次性 stdio Bridge → 常驻 Controller / 唯一 Runtime → 每轮独立 AGY CLI → 私有 Broker → 已授权执行器。Bridge 只处理 MCP 与本机转发；Controller 掌握命令、退出码、取消与证据，不能用 AGY 自称成功替代进程和产物验证。
+当成员在执行中确实缺少上级业务判断、选择或必要上下文时，可通过私有 Broker 的 `ask_leader` 向领导提问；领导在公开 `agy_status` 中看到 `leader_question` 后，通过 `agy_answer` 回复。问答只传受限文本，不会增加成员的 shell、源码写入、浏览器、Android、其他 MCP 或任何环境权限。
+
+实际链路：Codex → 一次性 stdio Bridge → 常驻 Controller / 唯一 CollaborativeRuntime → 每轮独立 AGY CLI → 私有 Broker → 已授权执行器。Bridge 只处理 MCP 与本机转发；Controller 掌握命令、退出码、取消、问答状态与证据，不能用 AGY 自称成功替代进程和产物验证。
 
 ### v0.3.1 Controller 加固状态
 
@@ -18,7 +20,15 @@ v0.3.1 不会自动停止或自动重启 stale Controller。新 Bridge 发现后
 
 `perf/context-efficient-status-v032` 收缩 Codex 默认可见的请求、状态与结果热路径：任务仍完整执行并保存证据，普通 status 不重复展开 warning/error 正文和 artifact manifest，`agy_capabilities` 默认只返回 workspace/command 路由字段；`agy_worker/agy_continue` 的公开输入也不再展示当前不可用的 shell/code_write 或无需模型调整的 artifact/summary 字节预算。当前分支的新一轮修补仍需 Windows + 真实 Codex 复验；在验收完成前不能把本节描述为正式已验证能力。
 
-v0.3.2 不改变 Controller protocol v2、六个 MCP 工具、单 Runtime、单执行槽、16 inflight、Runtime 权限执行边界或 request_id 语义。Runtime 仍保存完整 progress/revision；MCP server 在一次 status 总等待预算内合并中间 progress/unchanged revision。公开 `agy_status` 默认等待 50 秒，Codex 可按预计任务耗时自主选择 50～600 秒；MCP 内部仍把该总预算切成最多 25 秒的 Controller long-poll，任务提前进入终态时立即返回，从而减少 Codex tool round-trip。
+v0.3.2 当时不改变 Controller protocol v2、六个 MCP 工具、单 Runtime、单执行槽、16 inflight、Runtime 权限执行边界或 request_id 语义。Runtime 仍保存完整 progress/revision；MCP server 在一次 status 总等待预算内合并中间 progress/unchanged revision。公开 `agy_status` 默认等待 50 秒，Codex 可按预计任务耗时自主选择 50～600 秒；MCP 内部仍把该总预算切成最多 25 秒的 Controller long-poll，任务提前进入终态时立即返回，从而减少 Codex tool round-trip。
+
+### v0.4.0 领导 / 成员 AI 协作
+
+`feat/leader-member-questions` 在基础 Runtime 上增加 `CollaborativeRuntime`，新增成员私有动作 `ask_leader` 和第七个公开 MCP 工具 `agy_answer`。成员提问会写入当前 task record、推进 revision，并让 `agy_status` 立即返回 `leader_question`；领导回复后同一个 `ask_leader` 调用解除等待，AGY 继续原任务。
+
+协作问答不会建立独立聊天服务、不会调用外部模型 API，也不会让成员选择其他 leader。每个 task 最多 8 个问题；问题最多 4096 UTF-8 bytes，答复最多 8192 UTF-8 bytes；等待答复占用原任务 `total_timeout_sec`，不会额外延长。相同 question_id + 相同 answer 的重试幂等，不同 answer 返回 `idempotency_conflict`；取消、总超时或 Controller 重启均 fail-closed。
+
+**v0.4.0 当前只代表代码与合同已提交到功能分支，Windows 单测、schema regeneration、真实 AGY 提问/回复闭环仍需本地验收。没有这些新鲜证据前，不得宣称 v0.4.0 已完整通过。**
 
 ## 当前可用范围
 
@@ -27,12 +37,13 @@ v0.3.2 不改变 Controller protocol v2、六个 MCP 工具、单 Runtime、单�
 | 编译、测试、日志清洗 | 已启用；命令必须由本地配置登记 |
 | 浏览器 | 已启用；独立无头 Edge，支持观察、截图、console/network；交互另需 `browser_interact` |
 | 图片 | 已启用；真实 PNG/JPEG 输入，经 MCP 图片内容交给 AGY |
+| 领导 / 成员问答 | v0.4.0 代码已实现、待 Windows + 真实 AGY 验收；成员只能通过 `ask_leader` 咨询当前领导 |
 | Android / Logcat | 保留接口设计，未启用；尚未完成设备与包范围验收 |
 | 任意 shell、源码写入 | 拒绝；公开 MCP schema 不再暴露这些字段，Runtime 内部仍 fail-closed |
 
 **权限边界的实际强度：当前是 hook + Broker 的工具授权，不是 Windows 安全沙箱。** AGY 和已登记命令使用当前用户身份。项目副本避免常规构建写入原源码，但不是防恶意代码的隔离环境；已有 node_modules 通过 junction 复用，未设置系统只读权限。不要把这个版本用于不可信仓库的任意构建。浏览器 origins 校验覆盖入口 URL，不是重定向、子资源和网络出口防火墙。
 
-AGY 原生写文件、原生命令、其他 MCP 被 hook 拒绝；允许的只有私有 Broker、结束/等待工具及 Broker 的一个本地工具描述文件。实测未授权写文件被阻止。未更改用户 AGY 账号、默认模型或既有浏览器 MCP 配置。
+AGY 原生写文件、原生命令、其他 MCP 被 hook 拒绝；允许的只有私有 Broker、结束/等待工具及 Broker 的一个本地工具描述文件。v0.4.0 只在这个私有 Broker 增加 `ask_leader` 文本动作，不改变 hook 对原生写入、shell 与其他 MCP 的拒绝。未更改用户 AGY 账号、默认模型或既有浏览器 MCP 配置。
 
 ## 启动与接入
 
@@ -45,7 +56,7 @@ pwsh.exe -NoProfile -File scripts/check.ps1
 pwsh.exe -NoProfile -File scripts/register.ps1
 ```
 
-`register.ps1` 登记 AGY 私有 Broker 及 Codex 的 `agy_worker`，保留其他 MCP，并把 Codex 对该 MCP 的宿主 `tool_timeout_sec` 设为 660 秒，以覆盖合法的最长 600 秒 `agy_status` 等待；660 秒只是宿主调用上限，不会让每次调用固定等待这么久。升级到本轮代码后需重新执行注册入口使该配置生效。Codex 原配置备份在 `work/backups`，这些备份可能包含敏感配置，请勿提交。重新安装使用 `scripts/install.ps1 -Python <Python完整路径>`，依赖锁定在 `requirements.lock` 和 `vendor/browser/package-lock.json`。
+`register.ps1` 登记 AGY 私有 Broker 及 Codex 的 `agy_worker`，保留其他 MCP，并把 Codex 对该 MCP 的宿主 `tool_timeout_sec` 设为 660 秒，以覆盖合法的最长 600 秒 `agy_status` 等待；660 秒只是宿主调用上限，不会让每次调用固定等待这么久。升级到 v0.4.0 后需重新执行注册入口，使 `agy_answer` 进入 enabled_tools、更新 Broker 描述与 Codex 路由指令。Codex 原配置备份在 `work/backups`，这些备份可能包含敏感配置，请勿提交。重新安装使用 `scripts/install.ps1 -Python <Python完整路径>`，依赖锁定在 `requirements.lock` 和 `vendor/browser/package-lock.json`。
 
 同一数据目录仍只允许一个 Runtime，但可以同时存在多个 stdio Bridge。Controller 继续只有 1 个执行槽；v0.3.1 最多接受 16 个排队或运行中的 inflight 任务，第 17 个新的逻辑请求返回 `worker_busy`。同 `request_id`、同 fingerprint 的幂等重试在容量已满时仍返回原 task；queued Future 若尚未开始执行，`agy_cancel` 会直接进入 `cancelled`，无需等待前面的任务释放执行槽。
 
@@ -67,7 +78,7 @@ pwsh.exe -NoProfile -File scripts/stop.ps1 -Config 'D:\path\runtime.toml'
 
 v0.3.1 的显式停止允许管理端读取 legacy v1 state，并用旧实例 state 自己的 `protocol_version` 发起停止；当前 v2 的 `/control/stop` 在 Bearer 鉴权成功后不再要求业务协议一致，但 `/control/call` 仍严格要求当前协议。停止会等待目标实例真正消失；若 state 已被 replacement instance 替换，则停止流程不会继续向新实例发送控制请求。
 
-Controller 连接元数据保存在 `data/controller.json`。v2 state 包含 `protocol_version`、`implementation_version`、`implementation_sha256`、`config_sha256`、`instance_id`、PID、loopback endpoint、随机 token、config_path 和 started_at。endpoint 只接受精确的 `http://127.0.0.1:<port>`；不接受 localhost、0.0.0.0、IPv6、凭据、额外 path、query 或 fragment。state/health/当前磁盘实现身份必须一致才能用于普通业务调用。
+Controller 连接元数据保存在 `data/controller.json`。v2 state 包含 `protocol_version`、`implementation_version`、`implementation_sha256`、`config_sha256`、`instance_id`、PID、loopback endpoint、随机 token、config_path 和 started_at。endpoint 只接受精确的 `http://127.0.0.1:<port>`；不接受 localhost、0.0.0.0、IPv6、凭据、额外 path、query 或 fragment。state/health/当前磁盘实现身份必须一致才能用于普通业务调用。v0.4.0 的 `collaboration.py` 已纳入 Controller implementation hash，因此运行中的旧 Controller 会被新 Bridge 识别为 stale，而不会静默混用旧协作实现。
 
 Controller token 的保密性仍依赖本机用户和目录 ACL。`doctor` 在 v0.3.1 增加 data_dir ACL advisory：只报告是否成功检查、明显的宽泛读取主体和 token confidentiality 风险；检查失败显示 unknown，不会把未知状态当安全，也不会自动修改 ACL。此诊断不构成 Windows sandbox 或 effective-access 证明。
 
@@ -80,7 +91,8 @@ Controller token 的保密性仍依赖本机用户和目录 ACL。`doctor` 在 v
 | `agy_capabilities` | 仅在 workspace_id 或 command_id 未知时查询紧凑路由表；完整诊断走只读资源 |
 | `agy_worker` | 提交任务，立即返回 task_id、session_id 和状态 |
 | `agy_continue` | 同工作区续轮；必须传 session_id、expected_turn 及本轮公开权限 |
-| `agy_status` | 无 `after_revision` 时立即读取当前快照；有 revision 时默认最多等待 50 秒，也可由 Codex 选择 50～600 秒总预算；终态提前返回 |
+| `agy_status` | 无 `after_revision` 时立即读取当前快照；有 revision 时默认最多等待 50 秒，也可由 Codex 选择 50～600 秒总预算；终态或 `leader_question` 提前返回 |
+| `agy_answer` | 使用 status 返回的 task_id/question_id 回答当前成员问题；同 ID 同答复重试幂等 |
 | `agy_cancel` | 取消排队/运行任务，可重复调用 |
 | `agy_artifact_read` | 按证据 ID 读取元数据、最多 200 行文本或图片 |
 
@@ -92,7 +104,7 @@ Controller token 的保密性仍依赖本机用户和目录 ACL。`doctor` 在 v
 
 第一次只知道 `task_id`、还没有可作为变化基线的 revision 时，调用 `agy_status` 可省略 `after_revision`；MCP 会把这次请求转换为内部 `wait_ms=0`，立即取得当前快照。之后 queued/running 状态把上一次看到的 `revision` 作为 `after_revision`。公开 `wait_ms` 省略时总等待预算为 50000ms；Codex 可根据任务预计耗时显式选择 50000～600000ms。这个值是**最多等待预算，不是固定 sleep**：AGY 在窗口内提前进入 terminal 时，本次 MCP 调用立即返回。
 
-Runtime 内部仍可能因为 `captured_bytes/progress` 变化产生多个 revision。MCP server 在同一个公开总等待预算内持续观察并合并这些中间 revision，每次传给 Controller/Runtime 的内部 long-poll 仍不超过 25000ms，server→Controller 的单次 HTTP timeout 仍为 30 秒。中间 revision 不会重置公开总等待 deadline；例如 Codex 选择 120 秒，不会因为每个 progress revision 再获得新的 120 秒。
+Runtime 内部仍可能因为 `captured_bytes/progress` 变化产生多个 revision。MCP server 在同一个公开总等待预算内持续观察并合并这些普通中间 revision，每次传给 Controller/Runtime 的内部 long-poll 仍不超过 25000ms，server→Controller 的单次 HTTP timeout 仍为 30 秒。中间 revision 不会重置公开总等待 deadline；例如 Codex 选择 120 秒，不会因为每个 progress revision 再获得新的 120 秒。**v0.4.0 的 `leader_question` 不是普通 progress：一旦观察到就立即返回给领导，不能被 coalescing 吞掉。**
 
 如果等待窗口结束时仍没有新的可交付观察点且任务非终态，可返回最小无变化 envelope：
 
@@ -107,6 +119,33 @@ Runtime 内部仍可能因为 `captured_bytes/progress` 变化产生多个 revis
 
 `unchanged=true` 只表示这个观察窗口里没有新的状态 revision。**它不表示 AGY、Gradle 或其他操作卡死，也不会触发自动取消。** 若一次调用仍返回非终态，调用方应直接继续 `agy_status`；不需要在两次 status 之间生成“我再等一轮”等面向用户的等待说明。除非用户明确取消或既有总超时到达，否则仍等待实际进程终态。
 
+成员提问时，非终态 status 可能额外返回：
+
+```json
+{
+  "task_id": "task-...",
+  "status": "running",
+  "revision": 8,
+  "leader_question": {
+    "question_id": "question-...",
+    "question": "需要领导判断的问题",
+    "created_at": "2026-09-13T00:00:00Z"
+  }
+}
+```
+
+领导读取问题后用**原样 task_id/question_id** 调用：
+
+```json
+{
+  "task_id": "task-...",
+  "question_id": "question-...",
+  "answer": "继续使用当前 workspace。"
+}
+```
+
+`agy_answer` 成功后返回 `status=answered` 和新的 revision，成员从同一次 `ask_leader` 调用收到答复并继续。不要把 `question_id` 当作可猜测的顺序号，也不要用答复文本授权成员去做原任务未授权的系统操作。
+
 终态 status 默认只返回决策摘要，包括 `summary`、真实 operation 退出码、错误/警告计数、termination reason、源码是否变化以及可追溯的 evidence/result artifact ID；不再默认展开 `errors[]`、`warnings[]` 和整份 `artifacts[]` metadata。需要细节时按需读取：
 
 - `diagnostics_artifact_id`（通常为 `errors`）：结构化错误/警告正文；
@@ -115,7 +154,7 @@ Runtime 内部仍可能因为 `captured_bytes/progress` 变化产生多个 revis
 
 普通 JSON MCP 工具以 `structuredContent` 为 canonical machine result；`TextContent` 只提供不超过 256 UTF-8 bytes 的人类短摘要，不再把同一完整 JSON 复制第二遍。`agy_artifact_read` 是显式高信息量冷路径：文本/metadata 只发送一份实际 payload，图片仍走 ImageContent。为降低上下文消耗，读取日志时优先指定必要的 `start_line` / `line_count`，不要无条件拉取整份证据。
 
-v0.3.2 的公开字节门槛是：unchanged status ≤256B、changed nonterminal ≤512B、build/test terminal ≤1536B、其他 terminal ≤2048B、热路径 TextContent ≤256B。完整本地 evidence 不受这些热路径上限删除，仍由 artifact 机制保留。
+v0.3.2 的公开字节门槛是：unchanged status ≤256B、changed nonterminal ≤512B、build/test terminal ≤1536B、其他 terminal ≤2048B、热路径 TextContent ≤256B。v0.4.0 的 `leader_question` 本身受 4096 UTF-8 bytes 问题上限约束，因此它是显式协作载荷，不受普通 progress 512B 紧凑门槛假设。完整本地 evidence 不受这些热路径上限删除，仍由 artifact 机制保留。
 
 ### request_id 合同
 
@@ -193,21 +232,21 @@ Runtime 复制 Git 跟踪文件、未忽略的未跟踪文件，以及已初始�
 
 ## 结果和证据
 
-任务目录 `data/tasks/<task_id>` 保存 request.json、permissions.json、audit.ndjson、result.json、manifest.json、raw 日志、脱敏日志与截图。manifest 带 SHA-256、大小、类型和敏感标记。v0.3.2 的普通公开 status 使用独立紧凑预算，完整 result 和更多证据按 ID 读取；原始敏感日志只能本机查看，不通过普通 artifact 文本读取接口返回。
+任务目录 `data/tasks/<task_id>` 保存 request.json、permissions.json、audit.ndjson、result.json、manifest.json、raw 日志、脱敏日志与截图。manifest 带 SHA-256、大小、类型和敏感标记。v0.3.2 的普通公开 status 使用独立紧凑预算，完整 result 和更多证据按 ID 读取；原始敏感日志只能本机查看，不通过普通 artifact 文本读取接口返回。v0.4.0 的 pending `leader_question` 和有界 `leader_dialogue` 写入 task record，用于 status、审计和答复幂等；终态默认不会把整段问答历史展开到热路径。
 
 编译摘要区分 AGY 执行状态与实际命令退出码。错误列表保留原文、可提取的文件/行列、Gradle task（如存在）及日志行引用；编译器未提供行列时返回 null，不编造。stdout 和 stderr 原始文件分开保存，合并日志是 stdout 后接 stderr，不能据此推断跨流时间顺序。
 
-默认不自动删除日志和会话副本，避免丢失证据。当前没有自动留存清理任务；本机磁盘需要自行管理，建议确认任务结束、导出证据后定期清理。取消通过 Windows Job Objects 终止本轮创建的进程树；既有共享 HBuilderX 可能继续已经提交的导出，不强杀用户 GUI。Controller 重启将未完成任务标为 interrupted，不自动重做外部操作；历史 task、session 与 artifact 仍可查询。Controller 日志位于 `data/logs/controller.log`。
+默认不自动删除日志和会话副本，避免丢失证据。当前没有自动留存清理任务；本机磁盘需要自行管理，建议确认任务结束、导出证据后定期清理。取消通过 Windows Job Objects 终止本轮创建的进程树；既有共享 HBuilderX 可能继续已经提交的导出，不强杀用户 GUI。Controller 重启将未完成任务（包括等待领导答复的任务）标为 interrupted，不自动重做外部操作或恢复旧问答等待；历史 task、session 与 artifact 仍可查询。Controller 日志位于 `data/logs/controller.log`。
 
 ## 目录
 
 ```text
 config/runtime.toml       本机能力、工作区、固定命令
-src/agy_worker/           stdio Bridge、Controller、Runtime、Broker、hook、执行与证据模块
+src/agy_worker/           stdio Bridge、Controller、基础 Runtime、协作 Runtime、Broker、hook、执行与证据模块
 scripts/                 安装、检查、注册、运行和 HBuilderX 适配器
-schemas/                 六个公开工具的 JSON Schema
+schemas/                 七个公开工具的 JSON Schema
 examples/                样例请求和最小验证项目
-tests/                   权限、状态、路径、进程树和快照回归测试
+tests/                   权限、状态、路径、协作、进程树和快照回归测试
 vendor/browser/          锁定的浏览器 MCP 依赖
 docs/                    实施设计与验收记录
 data/                    会话副本、SQLite 状态和任务证据（不提交 Git）
@@ -217,9 +256,10 @@ work/                    诊断脚本、配置备份和验收中间结果（不�
 ## 后续阶段
 
 1. 已完成任务控制、AGY direct CLI、日志/构建端到端；系统隔离验收仍未完成。
-2. 已完成浏览器观察/截图端到端；进一步验收交互、网络范围及敏感字段处理。
-3. Android：按设备序列号和包名授权，先验收观察/Logcat，再启用点击、滑动与输入。
-4. 已完成真实图片读取；扩展多图证据对比及精度验证。
-5. 增强 Windows 账户/沙箱、工具链与网络隔离、审计留存。通过源码只读隔离验收后，才能设计有明确路径和理由的 code_write 授权。独立 Git worktree 可用于后续有意修改源码的任务，不能把 worktree 当作系统安全边界。
+2. v0.4.0 领导/成员问答代码已实现；仍需 Windows 单测、schema regeneration 和真实 AGY `ask_leader → agy_status → agy_answer → resume` 闭环验收后才能升级为已验证状态。
+3. 已完成浏览器观察/截图端到端；进一步验收交互、网络范围及敏感字段处理。
+4. Android：按设备序列号和包名授权，先验收观察/Logcat，再启用点击、滑动与输入。
+5. 已完成真实图片读取；扩展多图证据对比及精度验证。
+6. 增强 Windows 账户/沙箱、工具链与网络隔离、审计留存。通过源码只读隔离验收后，才能设计有明确路径和理由的 code_write 授权。独立 Git worktree 可用于后续有意修改源码的任务，不能把 worktree 当作系统安全边界。
 
 卸载连接使用 `scripts/uninstall.ps1`；默认保留所有代码和证据，不递归删除用户文件。
