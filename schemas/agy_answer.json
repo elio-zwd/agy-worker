@@ -1,6 +1,6 @@
 {
   "additionalProperties": false,
-  "description": "领导 AI 对当前成员 pending question 的严格回复合同。",
+  "description": "领导 AI 对当前成员 pending question 的严格回复合同；Runtime 另按 UTF-8 bytes 收紧。",
   "properties": {
     "task_id": {
       "maxLength": 100,
@@ -17,7 +17,7 @@
       "type": "string"
     },
     "answer": {
-      "maxLength": 8000,
+      "maxLength": 8192,
       "minLength": 1,
       "title": "Answer",
       "type": "string"
