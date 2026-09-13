@@ -1,4 +1,5 @@
 """在基础 Runtime 之上增加受控的领导/成员问答，不扩大执行权限。"""
+import json
 import threading
 import time
 import uuid
@@ -143,9 +144,9 @@ class CollaborativeRuntime(Runtime):
                 row = self.db.execute("SELECT record FROM tasks WHERE id=?", (task_id,)).fetchone()
                 if not row:
                     raise WorkerError("invalid_request", "任务不存在")
-                import json
                 record = json.loads(row[0])
 
+            # 已被接受的答复在任务后来结束后仍可幂等重放；只有不同文本才冲突。
             for entry in record.get("leader_dialogue", []):
                 if entry.get("question_id") != question_id or entry.get("status") != "answered":
                     continue
@@ -165,6 +166,16 @@ class CollaborativeRuntime(Runtime):
                 raise WorkerError("invalid_request", "当前任务没有等待领导答复的问题")
             if pending.get("question_id") != question_id:
                 raise WorkerError("stale_question", "question_id 不是当前等待答复的问题")
+
+            # run_process 的 total timeout 可能比 _run finally 更早发生；不能只依赖 cancel Event，
+            # 否则领导会在极短竞态窗口收到 answered，但成员进程已经无法消费该答复。
+            if context["cancel"].is_set():
+                self._close_pending_question(context, question_id, "cancelled")
+                raise WorkerError("cancelled", "任务已取消，不能再接受领导答复")
+            started = context.get("started")
+            if started is None or time.monotonic() - started >= context["request"].limits.total_timeout_sec:
+                self._close_pending_question(context, question_id, "timed_out")
+                raise WorkerError("timed_out", "任务总预算已耗尽，不能再接受领导答复")
 
             self._ensure_collaboration_context(context)
             answer_revision = record.get("revision", 0) + 1
